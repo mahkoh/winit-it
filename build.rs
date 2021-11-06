@@ -17,13 +17,13 @@ impl OsTarget {
     fn from_string(s: String) -> Self {
         use OsTarget::*;
         match &*s {
-            "windows" =>    Windows,
-            "macos" =>      Macos,
-            "linux" =>      Linux,
-            "dragonfly" =>  Dragonfly,
-            "freebsd" =>    Freebsd,
-            "netbsd" =>     Netbsd,
-            "openbsd" =>    Openbsd,
+            "windows" => Windows,
+            "macos" => Macos,
+            "linux" => Linux,
+            "dragonfly" => Dragonfly,
+            "freebsd" => Freebsd,
+            "netbsd" => Netbsd,
+            "openbsd" => Openbsd,
             _ => Other(s),
         }
     }
@@ -33,7 +33,10 @@ fn main() {
     use OsTarget::*;
 
     let os_target = OsTarget::from_env();
-    if matches!(os_target, Windows | Macos | Linux | Dragonfly | Freebsd | Netbsd | Openbsd) {
+    if matches!(
+        os_target,
+        Windows | Macos | Linux | Dragonfly | Freebsd | Netbsd | Openbsd
+    ) {
         println!("cargo:rustc-cfg=have_mod_supplement");
     }
 }

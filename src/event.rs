@@ -1,15 +1,15 @@
 use std::path::PathBuf;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{
-    AxisId, ButtonId, DeviceEvent as WDeviceEvent, DeviceId, ElementState, KeyEvent as WKeyEvent, MouseButton,
-    MouseScrollDelta, RawKeyEvent, Touch, TouchPhase,
+    AxisId, ButtonId, DeviceEvent as WDeviceEvent, DeviceId, ElementState, KeyEvent as WKeyEvent,
+    MouseButton, MouseScrollDelta, RawKeyEvent, Touch, TouchPhase,
 };
 use winit::event::{Event as WEvent, WindowEvent as WWindowEvent};
 use winit::keyboard;
-use winit::keyboard::{ModifiersState};
-use winit::window::{Theme, WindowId};
+use winit::keyboard::ModifiersState;
 #[cfg(have_mod_supplement)]
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+use winit::window::{Theme, WindowId};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModSupplement {
@@ -203,7 +203,7 @@ pub fn map_key_event(e: WKeyEvent) -> KeyEvent {
         mod_supplement: ModSupplement {
             text_with_all_modifiers: e.text_with_all_modifiers().map(|s| s.to_string()),
             key_without_modifiers: e.key_without_modifiers(),
-       }
+        },
     }
 }
 

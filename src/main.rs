@@ -1,6 +1,7 @@
-use std::path::Path;
 use crate::runner::Execution;
 use chrono::Local;
+use rayon::ThreadPoolBuilder;
+use std::path::Path;
 
 mod backend;
 mod event;
@@ -13,11 +14,19 @@ mod tlog;
 
 fn main() {
     tlog::init();
+    ThreadPoolBuilder::new()
+        .thread_name(|i| format!("rayon-{}", i))
+        .build_global()
+        .unwrap();
     let backends = backend::backends();
     let tests = tests::tests();
     let testruns_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("testruns");
     let current_dir = testruns_dir.join("latest");
-    let testrun_dir = testruns_dir.join("records").join(format!("{} {:x}", Local::now().format("%Y-%m-%d %H:%M"), std::process::id()));
+    let testrun_dir = testruns_dir.join("records").join(format!(
+        "{} {:x}",
+        Local::now().format("%Y-%m-%d %H:%M"),
+        std::process::id()
+    ));
     std::fs::create_dir_all(&testrun_dir).unwrap();
     #[cfg(unix)]
     {
@@ -29,9 +38,7 @@ fn main() {
         let _ = std::fs::remove_dir(&current_dir);
         let _ = std::os::windows::fs::symlink_dir(&testrun_dir, &current_dir);
     }
-    let exec = Execution {
-        dir: testrun_dir,
-    };
+    let exec = Execution { dir: testrun_dir };
     for backend in &backends {
         runner::run_tests(&exec, &**backend, &tests);
     }

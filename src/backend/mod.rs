@@ -11,22 +11,29 @@ pub fn backends() -> Vec<Box<dyn Backend>> {
     vec![x11::backend()]
 }
 
-pub trait Backend {
+bitflags::bitflags! {
+    pub struct BackendFlags: u32 {
+        const MT_SAFE = 1 << 0;
+    }
+}
+
+pub trait Backend: Sync {
     fn instantiate(&self) -> Box<dyn Instance>;
-    fn is_mt_safe(&self) -> bool;
+    fn flags(&self) -> BackendFlags;
     fn name(&self) -> &str;
 }
 
 pub trait Instance {
+    fn backend(&self) -> &dyn Backend;
     fn default_seat(&self) -> Box<dyn Seat>;
     fn create_event_loop(&self) -> Box<dyn EventLoop>;
     fn set_background_color(&self, window: &Window, r: u8, g: u8, b: u8);
     fn take_screenshot(&self);
-    fn mapped<'b>(&'b self, window: &Window) -> Pin<Box<dyn Future<Output=()> + 'b>>;
+    fn mapped<'b>(&'b self, window: &Window) -> Pin<Box<dyn Future<Output = ()> + 'b>>;
 }
 
 pub trait EventLoop {
-    fn event<'a>(&'a self) -> Pin<Box<dyn Future<Output=Event<Box<dyn Any>>> + 'a>>;
+    fn event<'a>(&'a self) -> Pin<Box<dyn Future<Output = Event<Box<dyn Any>>> + 'a>>;
     fn create_window(&self, builder: WindowBuilder) -> Window;
 }
 

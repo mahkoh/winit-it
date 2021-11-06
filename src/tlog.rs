@@ -29,9 +29,10 @@ impl Log for Logger {
         let now = Local::now().format("%Y-%m-%d %H:%M:%S,%3f");
         if !crate::test::has_test_data() {
             eprintln!(
-                "{} [{}] [{}]: {}",
+                "{} [{}] [{}] [{}]: {}",
                 now,
                 record.level(),
+                std::thread::current().name().unwrap_or("<unnamed thread>"),
                 record.module_path().unwrap_or(""),
                 record.args()
             );

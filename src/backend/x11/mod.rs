@@ -1,7 +1,9 @@
 use crate::backend::x11::MessageType::{
     MT_CREATE_KEYBOARD, MT_CREATE_KEYBOARD_REPLY, MT_KEY_PRESS, MT_KEY_RELEASE,
 };
-use crate::backend::{Backend, EventLoop, Instance, Key, Keyboard, Mouse, PressedKey, Seat};
+use crate::backend::{
+    Backend, BackendFlags, EventLoop, Instance, Key, Keyboard, Mouse, PressedKey, Seat,
+};
 use crate::event::{map_event, Event};
 use parking_lot::Mutex;
 use std::any::Any;
@@ -223,16 +225,20 @@ impl Backend for Arc<XBackend> {
         }))
     }
 
-    fn is_mt_safe(&self) -> bool {
-        false
-    }
-
     fn name(&self) -> &str {
         "x11"
+    }
+
+    fn flags(&self) -> BackendFlags {
+        BackendFlags::MT_SAFE
     }
 }
 
 impl Instance for Arc<XInstance> {
+    fn backend(&self) -> &dyn Backend {
+        &self.data.backend
+    }
+
     fn default_seat(&self) -> Box<dyn Seat> {
         Box::new(Arc::new(XSeat {
             instance: self.clone(),
@@ -354,7 +360,7 @@ impl Instance for Arc<XInstance> {
         }
     }
 
-    fn mapped<'b>(&'b self, window: &Window) -> Pin<Box<dyn Future<Output=()> + 'b>> {
+    fn mapped<'b>(&'b self, window: &Window) -> Pin<Box<dyn Future<Output = ()> + 'b>> {
         struct Wait<'a>(&'a XInstanceData, ffi::xcb_window_t);
         impl<'a> Future for Wait<'a> {
             type Output = ();
@@ -428,7 +434,7 @@ impl Drop for XEventLoop {
 }
 
 impl EventLoop for XEventLoop {
-    fn event<'a>(&'a self) -> Pin<Box<dyn Future<Output=Event<Box<dyn Any>>> + 'a>> {
+    fn event<'a>(&'a self) -> Pin<Box<dyn Future<Output = Event<Box<dyn Any>>> + 'a>> {
         struct Changed<'b>(&'b XEventLoopData);
         impl<'b> Future for Changed<'b> {
             type Output = Event<Box<dyn Any>>;

@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-winit = { path = "../winit" }
+#winit = { path = "../winit" }
+winit = { git = "https://github.com/mahkoh/winit", rev = "2b1a823de9d84c64fe536fbcd5f112ba46c09cc4" }
 log = "0.4.14"
 libc = "0.2.105"
 uapi = "0.2.2"
@@ -14,7 +15,8 @@ tokio = { version = "1.13.0", features = ["rt", "time", "io-std", "net", "macros
 parking_lot = "0.11.2"
 futures = "0.3.17"
 xcb-dl = "0.2.0"
-xcb-dl-util = { path = "../xcb-dl-util", features = ["xcb_xinput"] }
+#xcb-dl-util = { path = "../xcb-dl-util", features = ["xcb_xinput"] }
+xcb-dl-util = { git = "https://github.com/mahkoh/xcb-dl-util", rev = "d9593cc80cd9315356066b0c2cc82940d33b44a1", features = ["xcb_xinput"]  }
 async-trait = "0.1.51"
 chrono = "0.4.19"
 backtrace = "0.3.63"

@@ -1487,6 +1487,7 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 [[package]]
 name = "winit"
 version = "0.24.0"
+source = "git+https://github.com/mahkoh/winit?rev=2b1a823de9d84c64fe536fbcd5f112ba46c09cc4#2b1a823de9d84c64fe536fbcd5f112ba46c09cc4"
 dependencies = [
  "bitflags",
  "cocoa",
@@ -1570,6 +1571,7 @@ dependencies = [
 [[package]]
 name = "xcb-dl-util"
 version = "0.1.0"
+source = "git+https://github.com/mahkoh/xcb-dl-util?rev=d9593cc80cd9315356066b0c2cc82940d33b44a1#d9593cc80cd9315356066b0c2cc82940d33b44a1"
 dependencies = [
  "bitflags",
  "bstr",

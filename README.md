@@ -10,6 +10,8 @@
 
 2. Run with `cargo run`
 
+3. Logs are in the `testruns` directory.
+
 # Troubleshooting
 
 The plain Xorg binary is expected to be at `/usr/lib/Xorg`. (`/usr/bin/Xorg` is usually

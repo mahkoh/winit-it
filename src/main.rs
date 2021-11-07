@@ -4,7 +4,9 @@ use rayon::ThreadPoolBuilder;
 use std::path::Path;
 
 mod backend;
+mod backends;
 mod event;
+mod keyboard;
 mod runner;
 #[allow(dead_code)]
 mod screenshot;
@@ -18,7 +20,7 @@ fn main() {
         .thread_name(|i| format!("rayon-{}", i))
         .build_global()
         .unwrap();
-    let backends = backend::backends();
+    let backends = backends::backends();
     let tests = tests::tests();
     let testruns_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("testruns");
     let current_dir = testruns_dir.join("latest");

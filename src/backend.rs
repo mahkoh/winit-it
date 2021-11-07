@@ -1,15 +1,9 @@
 use crate::event::{Event, WindowEvent, WindowEventExt, WindowKeyboardInput};
-use std::any::Any;
+use crate::keyboard::Key;
 use std::future::Future;
 use std::pin::Pin;
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowBuilder};
-
-mod x11;
-
-pub fn backends() -> Vec<Box<dyn Backend>> {
-    vec![x11::backend()]
-}
 
 bitflags::bitflags! {
     pub struct BackendFlags: u32 {
@@ -33,7 +27,7 @@ pub trait Instance {
 }
 
 pub trait EventLoop {
-    fn event<'a>(&'a self) -> Pin<Box<dyn Future<Output = Event<Box<dyn Any>>> + 'a>>;
+    fn event<'a>(&'a self) -> Pin<Box<dyn Future<Output = Event> + 'a>>;
     fn create_window(&self, builder: WindowBuilder) -> Window;
 }
 
@@ -84,117 +78,3 @@ pub trait Keyboard {
 pub trait Mouse {}
 
 pub trait PressedKey {}
-
-#[allow(dead_code)]
-#[derive(Copy, Clone, Hash, Eq, PartialEq)]
-pub enum Key {
-    Key0,
-    Key1,
-    Key102Nd,
-    Key2,
-    Key3,
-    Key4,
-    Key5,
-    Key6,
-    Key7,
-    Key8,
-    Key9,
-    KeyA,
-    KeyApostrophe,
-    KeyB,
-    KeyBackslash,
-    KeyBackspace,
-    KeyC,
-    KeyCapslock,
-    KeyComma,
-    KeyD,
-    KeyDelete,
-    KeyDollar,
-    KeyDot,
-    KeyDown,
-    KeyE,
-    KeyEnd,
-    KeyEnter,
-    KeyEqual,
-    KeyEsc,
-    KeyEuro,
-    KeyF,
-    KeyF1,
-    KeyF10,
-    KeyF11,
-    KeyF12,
-    KeyF2,
-    KeyF3,
-    KeyF4,
-    KeyF5,
-    KeyF6,
-    KeyF7,
-    KeyF8,
-    KeyF9,
-    KeyG,
-    KeyGrave,
-    KeyH,
-    KeyHome,
-    KeyI,
-    KeyInsert,
-    KeyJ,
-    KeyK,
-    KeyKp0,
-    KeyKp1,
-    KeyKp2,
-    KeyKp3,
-    KeyKp4,
-    KeyKp5,
-    KeyKp6,
-    KeyKp7,
-    KeyKp8,
-    KeyKp9,
-    KeyKpasterisk,
-    KeyKpcomma,
-    KeyKpdot,
-    KeyKpenter,
-    KeyKpequal,
-    KeyKpminus,
-    KeyKpplus,
-    KeyKpslash,
-    KeyL,
-    KeyLeft,
-    KeyLeftalt,
-    KeyLeftbrace,
-    KeyLeftctrl,
-    KeyLeftmeta,
-    KeyLeftshift,
-    KeyM,
-    KeyMenu,
-    KeyMinus,
-    KeyN,
-    KeyNumlock,
-    KeyO,
-    KeyP,
-    KeyPagedown,
-    KeyPageup,
-    KeyPause,
-    KeyQ,
-    KeyR,
-    KeyRight,
-    KeyRightalt,
-    KeyRightbrace,
-    KeyRightctrl,
-    KeyRightmeta,
-    KeyRightshift,
-    KeyS,
-    KeyScrolllock,
-    KeySemicolon,
-    KeySlash,
-    KeySpace,
-    KeySysRq,
-    KeyT,
-    KeyTab,
-    KeyU,
-    KeyUp,
-    KeyV,
-    KeyW,
-    KeyX,
-    KeyY,
-    KeyZ,
-}

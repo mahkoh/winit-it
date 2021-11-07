@@ -1,12 +1,11 @@
-use crate::backend::x11::MessageType::{
+use MessageType::{
     MT_CREATE_KEYBOARD, MT_CREATE_KEYBOARD_REPLY, MT_KEY_PRESS, MT_KEY_RELEASE,
 };
 use crate::backend::{
-    Backend, BackendFlags, EventLoop, Instance, Key, Keyboard, Mouse, PressedKey, Seat,
+    Backend, BackendFlags, EventLoop, Instance, Keyboard, Mouse, PressedKey, Seat,
 };
-use crate::event::{map_event, Event};
+use crate::event::{map_event, Event, UserEvent};
 use parking_lot::Mutex;
-use std::any::Any;
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
@@ -25,6 +24,7 @@ use winit::platform::unix::{EventLoopExtUnix, EventLoopWindowTargetExtUnix, Wind
 use winit::window::{Window, WindowBuilder};
 use xcb_dl::{ffi, Xcb, XcbXinput};
 use xcb_dl_util::error::XcbErrorParser;
+use crate::keyboard::Key;
 
 mod evdev;
 mod wm;
@@ -417,9 +417,9 @@ impl Drop for XInstance {
 
 struct XEventLoopData {
     instance: Arc<XInstance>,
-    el: Mutex<WEventLoop<Box<dyn Any>>>,
+    el: Mutex<WEventLoop<UserEvent>>,
     waiters: Mutex<Vec<Waker>>,
-    events: Mutex<VecDeque<Event<Box<dyn Any>>>>,
+    events: Mutex<VecDeque<Event>>,
 }
 
 struct XEventLoop {
@@ -434,10 +434,10 @@ impl Drop for XEventLoop {
 }
 
 impl EventLoop for XEventLoop {
-    fn event<'a>(&'a self) -> Pin<Box<dyn Future<Output = Event<Box<dyn Any>>> + 'a>> {
+    fn event<'a>(&'a self) -> Pin<Box<dyn Future<Output = Event> + 'a>> {
         struct Changed<'b>(&'b XEventLoopData);
         impl<'b> Future for Changed<'b> {
-            type Output = Event<Box<dyn Any>>;
+            type Output = Event;
             fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
                 if let Some(e) = self.0.events.lock().pop_front() {
                     Poll::Ready(e)

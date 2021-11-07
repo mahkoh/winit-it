@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::backend::Key;
+use crate::keyboard::Key;
 
 pub const EV_SYN: u32 = 0;
 pub const EV_KEY: u32 = 1;
@@ -810,7 +810,6 @@ pub fn map_key(key: Key) -> u32 {
     match key {
         Key::Key0 => KEY_0,
         Key::Key1 => KEY_1,
-        Key::Key102Nd => KEY_102ND,
         Key::Key2 => KEY_2,
         Key::Key3 => KEY_3,
         Key::Key4 => KEY_4,
@@ -829,7 +828,6 @@ pub fn map_key(key: Key) -> u32 {
         Key::KeyComma => KEY_COMMA,
         Key::KeyD => KEY_D,
         Key::KeyDelete => KEY_DELETE,
-        Key::KeyDollar => KEY_DOLLAR,
         Key::KeyDot => KEY_DOT,
         Key::KeyDown => KEY_DOWN,
         Key::KeyE => KEY_E,
@@ -837,7 +835,6 @@ pub fn map_key(key: Key) -> u32 {
         Key::KeyEnter => KEY_ENTER,
         Key::KeyEqual => KEY_EQUAL,
         Key::KeyEsc => KEY_ESC,
-        Key::KeyEuro => KEY_EURO,
         Key::KeyF => KEY_F,
         Key::KeyF1 => KEY_F1,
         Key::KeyF10 => KEY_F10,
@@ -870,10 +867,8 @@ pub fn map_key(key: Key) -> u32 {
         Key::KeyKp8 => KEY_KP8,
         Key::KeyKp9 => KEY_KP9,
         Key::KeyKpasterisk => KEY_KPASTERISK,
-        Key::KeyKpcomma => KEY_KPCOMMA,
         Key::KeyKpdot => KEY_KPDOT,
         Key::KeyKpenter => KEY_KPENTER,
-        Key::KeyKpequal => KEY_KPEQUAL,
         Key::KeyKpminus => KEY_KPMINUS,
         Key::KeyKpplus => KEY_KPPLUS,
         Key::KeyKpslash => KEY_KPSLASH,

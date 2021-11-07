@@ -12,6 +12,11 @@ use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{Theme, WindowId};
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct UserEvent {
+
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct ModSupplement {
     pub text_with_all_modifiers: Option<String>,
     pub key_without_modifiers: keyboard::Key<'static>,
@@ -127,10 +132,10 @@ pub struct DeviceEventExt {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Event<T: 'static> {
+pub enum Event {
     WindowEvent(WindowEventExt),
     DeviceEvent(DeviceEventExt),
-    UserEvent(T),
+    UserEvent(UserEvent),
     RedrawRequested(WindowId),
 }
 
@@ -296,7 +301,7 @@ pub fn map_window_event(e: WWindowEvent<'_>) -> WindowEvent {
     }
 }
 
-pub fn map_event<T: 'static>(e: WEvent<'_, T>) -> Option<Event<T>> {
+pub fn map_event(e: WEvent<'_, UserEvent>) -> Option<Event> {
     match e {
         WEvent::NewEvents(_) => None,
         WEvent::WindowEvent { window_id, event } => Some(Event::WindowEvent(WindowEventExt {

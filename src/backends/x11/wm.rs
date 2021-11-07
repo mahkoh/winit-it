@@ -1,4 +1,4 @@
-use crate::backend::x11::{WindowData, XInstanceData};
+use super::{WindowData, XInstanceData};
 use std::future::Future;
 use std::sync::Arc;
 use tokio::io::unix::AsyncFd;

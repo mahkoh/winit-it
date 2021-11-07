@@ -1,5 +1,5 @@
 use crate::backend::Instance;
-use crate::backend::Key::{KeyL, KeyLeftctrl, KeyLeftshift, KeyRightalt, KeyRightctrl};
+use crate::keyboard::Key::{KeyL, KeyLeftshift, KeyRightalt, KeyRightctrl};
 use winit::event::ElementState;
 use winit::keyboard::{Key as WKey, KeyCode, KeyLocation, ModifiersState};
 

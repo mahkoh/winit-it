@@ -67,7 +67,7 @@ fn run_test_outer(
     }));
     if failed.unwrap_or(true) {
         num_failed.fetch_add(1, Relaxed);
-        log::error!("{}/{}: Test failed", idx, total);
+        log::error!("{}/{}: Test {} failed", idx, total, test.name());
     }
 }
 

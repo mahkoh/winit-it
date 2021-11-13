@@ -12,9 +12,7 @@ use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{Theme, WindowId};
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct UserEvent {
-
-}
+pub struct UserEvent {}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModSupplement {

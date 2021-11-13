@@ -8,10 +8,9 @@ test!(run);
 async fn run(instance: &dyn Instance) {
     let el = instance.create_event_loop();
     let window = el.create_window(Default::default());
-    window.set_visible(true);
-    instance.mapped(&window).await;
+    window.mapped(true).await;
     let seat = instance.default_seat();
-    seat.focus(&window);
+    seat.focus(&*window);
     let kb = seat.add_keyboard();
 
     {

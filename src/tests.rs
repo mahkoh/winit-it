@@ -24,7 +24,23 @@ macro_rules! test {
     };
 }
 
+mod always_on_top;
+#[cfg(target_os = "linux")]
+mod class;
+mod decorations;
+mod delete_window;
+mod maximize;
+mod minimize;
+mod physical_inner_size;
+mod physical_outer_position;
+mod physical_size_bounds;
+#[cfg(target_os = "linux")]
+mod ping;
+mod title;
+mod urgency;
+mod visible;
 mod window_keyboard;
+mod resizable;
 
 use crate::backend::{BackendFlags, Instance};
 use std::future::Future;
@@ -43,5 +59,21 @@ pub fn tests() -> Vec<Box<dyn Test>> {
     vec![
         //
         Box::new(window_keyboard::Test),
+        Box::new(visible::Test),
+        Box::new(always_on_top::Test),
+        Box::new(decorations::Test),
+        Box::new(physical_inner_size::Test),
+        Box::new(physical_outer_position::Test),
+        Box::new(title::Test),
+        Box::new(maximize::Test),
+        Box::new(physical_size_bounds::Test),
+        Box::new(urgency::Test),
+        #[cfg(target_os = "linux")]
+        Box::new(class::Test),
+        Box::new(delete_window::Test),
+        #[cfg(target_os = "linux")]
+        Box::new(ping::Test),
+        Box::new(minimize::Test),
+        Box::new(resizable::Test),
     ]
 }

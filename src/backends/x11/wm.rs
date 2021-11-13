@@ -1,46 +1,152 @@
-use super::{WindowData, XInstanceData};
+use super::XInstanceData;
+use crate::backends::x11::{Protocols, WindowState};
 use std::future::Future;
+use std::ptr;
 use std::sync::Arc;
 use tokio::io::unix::AsyncFd;
 use tokio::io::Interest;
 use xcb_dl::ffi;
 use xcb_dl_util::error::XcbErrorType;
+use xcb_dl_util::hint::{XcbHints, XcbHintsFlags, XcbSizeHints, XcbSizeHintsFlags};
 
 pub(super) fn run(instance: Arc<XInstanceData>) -> impl Future<Output = ()> {
     unsafe {
+        let xcb = &instance.backend.xcb;
+        let c = instance.c;
         let events = ffi::XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT
             | ffi::XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY
             | ffi::XCB_EVENT_MASK_PROPERTY_CHANGE;
-        let cookie = instance.backend.xcb.xcb_change_window_attributes_checked(
-            instance.c,
+        let cookie = xcb.xcb_change_window_attributes_checked(
+            c,
             instance.screen.root,
             ffi::XCB_CW_EVENT_MASK,
             &events as *const ffi::xcb_event_mask_t as _,
         );
-        if let Err(e) = instance.errors.check_cookie(&instance.backend.xcb, cookie) {
+        if let Err(e) = instance.errors.check_cookie(xcb, cookie) {
             panic!("Could not select wm events: {}", e);
         }
-        let wm = Wm { instance };
+        let supported = [
+            instance.atoms.net_client_list,
+            instance.atoms.net_supporting_wm_check,
+        ];
+        let cookie = xcb.xcb_change_property_checked(
+            c,
+            ffi::XCB_PROP_MODE_REPLACE as _,
+            instance.screen.root,
+            instance.atoms.net_supported,
+            ffi::XCB_ATOM_ATOM,
+            32,
+            supported.len() as _,
+            supported.as_ptr() as _,
+        );
+        if let Err(e) = instance.errors.check_cookie(xcb, cookie) {
+            panic!("Could not set _NET_SUPPORTED property: {}", e);
+        }
+        let window_id = xcb.xcb_generate_id(c);
+        let cookie = xcb.xcb_create_window_checked(
+            c,
+            instance.screen.root_depth,
+            window_id,
+            instance.screen.root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            ffi::XCB_WINDOW_CLASS_INPUT_OUTPUT as _,
+            instance.screen.root_visual,
+            0,
+            ptr::null(),
+        );
+        if let Err(e) = instance.errors.check_cookie(xcb, cookie) {
+            panic!("Could not create child window: {}", e);
+        }
+        const WM_NAME: &str = "UNKNOWN WM";
+        let cookie = xcb.xcb_change_property_checked(
+            c,
+            ffi::XCB_PROP_MODE_REPLACE as _,
+            window_id,
+            instance.atoms.net_wm_name,
+            instance.atoms.utf8_string,
+            8,
+            WM_NAME.len() as _,
+            WM_NAME.as_ptr() as *const _,
+        );
+        if let Err(e) = instance.errors.check_cookie(xcb, cookie) {
+            panic!("Could not set _NET_WM_NAME property on window: {}", e);
+        }
+        let cookie = instance.backend.xcb.xcb_change_property_checked(
+            instance.c,
+            ffi::XCB_PROP_MODE_REPLACE as _,
+            instance.screen.root,
+            instance.atoms.net_supporting_wm_check,
+            ffi::XCB_ATOM_ATOM,
+            32,
+            1,
+            &window_id as *const _ as _,
+        );
+        if let Err(e) = instance.errors.check_cookie(&instance.backend.xcb, cookie) {
+            panic!(
+                "Could not set _NET_SUPPORTING_WM_CHECK property on root: {}",
+                e
+            );
+        }
+        let cookie = instance.backend.xcb.xcb_change_property_checked(
+            instance.c,
+            ffi::XCB_PROP_MODE_REPLACE as _,
+            window_id,
+            instance.atoms.net_supporting_wm_check,
+            ffi::XCB_ATOM_ATOM,
+            32,
+            1,
+            &window_id as *const _ as _,
+        );
+        if let Err(e) = instance.errors.check_cookie(&instance.backend.xcb, cookie) {
+            panic!(
+                "Could not set _NET_SUPPORTING_WM_CHECK property on child: {}",
+                e
+            );
+        }
+        let wm = Wm {
+            instance,
+            window_id,
+        };
+
         wm.run()
     }
 }
 
 struct Wm {
     instance: Arc<XInstanceData>,
+    window_id: ffi::xcb_window_t,
 }
+
+impl Drop for Wm {
+    fn drop(&mut self) {
+        unsafe {
+            self.instance
+                .backend
+                .xcb
+                .xcb_destroy_window(self.instance.c, self.window_id);
+        }
+    }
+}
+
+pub const TITLE_HEIGHT: u16 = 10;
 
 impl Wm {
     async fn run(mut self) {
+        self.update_client_list();
         let fd = AsyncFd::with_interest(self.instance.fd, Interest::READABLE).unwrap();
         loop {
-            fd.readable().await.unwrap().clear_ready();
             self.handle_events();
+            fd.readable().await.unwrap().clear_ready();
         }
     }
 
     fn handle_events(&mut self) {
-        loop {
-            unsafe {
+        unsafe {
+            loop {
                 let event = self
                     .instance
                     .backend
@@ -54,18 +160,23 @@ impl Wm {
                     Ok(e) => e,
                     Err(e) => {
                         if matches!(e.ty, XcbErrorType::MissingReply) {
-                            return;
+                            break;
                         }
                         panic!("The connection is in error: {}", e);
                     }
                 };
                 self.handle_event(&event);
             }
+            self
+                .instance
+                .backend
+                .xcb
+                .xcb_flush(self.instance.c);
         }
     }
 
     fn handle_event(&mut self, event: &ffi::xcb_generic_event_t) {
-        match event.response_type {
+        match event.response_type & 0x7f {
             ffi::XCB_CREATE_NOTIFY => self.handle_create_notify(event),
             ffi::XCB_MAP_REQUEST => self.handle_map_request(event),
             ffi::XCB_CONFIGURE_REQUEST => self.handle_configure_request(event),
@@ -73,6 +184,9 @@ impl Wm {
             ffi::XCB_MAP_NOTIFY => self.handle_map_notify(event),
             ffi::XCB_UNMAP_NOTIFY => self.handle_unmap_notify(event),
             ffi::XCB_DESTROY_NOTIFY => self.handle_destroy_notify(event),
+            ffi::XCB_REPARENT_NOTIFY => self.handle_reparent_notify(event),
+            ffi::XCB_CLIENT_MESSAGE => self.handle_client_message(event),
+            ffi::XCB_CONFIGURE_NOTIFY => self.handle_configure_notify(event),
             ffi::XCB_MAPPING_NOTIFY => {}
             _ => {
                 log::warn!("Received unexpected event: {:?}", event);
@@ -82,24 +196,413 @@ impl Wm {
 
     fn handle_property_notify(&mut self, event: &ffi::xcb_generic_event_t) {
         let event = unsafe { &*(event as *const _ as *const ffi::xcb_property_notify_event_t) };
-        log::info!("{:?}", event);
+        if event.atom == self.instance.atoms.motif_wm_hints {
+            log::info!("MOTIF_WM_HINTS changed: {:?}", event.window);
+            self.handle_motif_wm_hints(event.window);
+        } else if event.atom == ffi::XCB_ATOM_WM_NAME {
+            log::info!("WM_NAME changed: {:?}", event.window);
+            self.handle_wm_name(event.window);
+        } else if event.atom == self.instance.atoms.wm_hints {
+            log::info!("WM_HINTS changed: {:?}", event.window);
+            self.handle_wm_hints(event.window);
+        } else if event.atom == self.instance.atoms.wm_normal_hints {
+            log::info!("WM_NORMAL_HINTS changed: {:?}", event.window);
+            self.handle_wm_normal_hints(event.window);
+        } else if event.atom == self.instance.atoms.net_wm_name {
+            log::info!("NET_WM_NAME changed: {:?}", event.window);
+            self.handle_net_wm_name(event.window);
+        } else if event.atom == ffi::XCB_ATOM_WM_CLASS {
+            log::info!("WM_CLASS changed: {:?}", event.window);
+            self.handle_wm_class(event.window);
+        } else if event.atom == self.instance.atoms.wm_protocols {
+            log::info!("WM_PROTOCOLS changed: {:?}", event.window);
+            self.handle_wm_protocols(event.window);
+        } else if event.atom == self.instance.atoms.net_supporting_wm_check {
+            // ignored
+        } else if event.atom == self.instance.atoms.net_supported {
+            // ignored
+        } else if event.atom == self.instance.atoms.net_client_list {
+            // ignored
+        } else if event.atom == self.instance.atoms.wm_state {
+            // ignored
+        } else {
+            unsafe {
+                let xcb = &self.instance.backend.xcb;
+                let mut err = ptr::null_mut();
+                let s = xcb.xcb_get_atom_name_reply(
+                    self.instance.c,
+                    xcb.xcb_get_atom_name(self.instance.c, event.atom),
+                    &mut err,
+                );
+                let name = match self.instance.errors.check(xcb, s, err) {
+                    Ok(name) => name,
+                    Err(e) => {
+                        log::warn!("Cannot retrieve property name: {}", e);
+                        return;
+                    }
+                };
+                let name = std::slice::from_raw_parts(
+                    xcb.xcb_get_atom_name_name(&*name) as *const u8,
+                    name.name_len as _,
+                );
+                log::warn!("Unknown property change: {}", String::from_utf8_lossy(name));
+            }
+        }
+    }
+
+    fn handle_net_wm_name(&mut self, window: ffi::xcb_window_t) {
+        if let Some(n) = self.handle_wm_name_(
+            window,
+            "net wm name",
+            self.instance.atoms.net_wm_name,
+            self.instance.atoms.utf8_string,
+        ) {
+            let mut data = self.instance.wm_data.lock();
+            let win = match data.window(window) {
+                Some(win) => win,
+                None => return,
+            };
+            *win.utf8_title.borrow_mut() = n;
+            win.upgade();
+            data.changed();
+        }
+    }
+
+    fn handle_wm_hints(&mut self, window: ffi::xcb_window_t) {
+        let mut data = self.instance.wm_data.lock();
+        let win = match data.window(window) {
+            Some(win) => win,
+            None => {
+                return;
+            }
+        };
+        let res = unsafe {
+            xcb_dl_util::property::get_property::<u32>(
+                &self.instance.backend.xcb,
+                &self.instance.errors,
+                window,
+                ffi::XCB_ATOM_WM_HINTS,
+                ffi::XCB_ATOM_WM_HINTS,
+                false,
+                10000,
+            )
+        };
+        let res = match res {
+            Ok(res) => res,
+            Err(e) => {
+                log::warn!("Could not retrieve hints property: {}", e);
+                return;
+            }
+        };
+        let res = match XcbHints::try_from(&*res) {
+            Ok(res) => res,
+            Err(e) => {
+                log::warn!("Could not covert hints property to normal hints: {}", e);
+                return;
+            }
+        };
+        win.urgency.set(res.flags.contains(XcbHintsFlags::URGENCY));
+        loop {
+            if res.flags.contains(XcbHintsFlags::STATE) {
+                let state = match res.initial_state {
+                    0 => WindowState::Withdrawn,
+                    1 => WindowState::Normal,
+                    3 => WindowState::Iconic,
+                    _ => {
+                        log::info!("Unknown initial state {}", res.initial_state);
+                        break;
+                    }
+                };
+                win.initial_state.set(state);
+            }
+            break;
+        }
+        log::info!("Hints updated for {}: {:?}", win.id, res);
+        win.upgade();
+        data.changed();
+    }
+
+    fn handle_wm_class(&mut self, window: ffi::xcb_window_t) {
+        let mut data = self.instance.wm_data.lock();
+        let win = match data.window(window) {
+            Some(win) => win,
+            None => {
+                return;
+            }
+        };
+        let res = unsafe {
+            xcb_dl_util::property::get_property::<u8>(
+                &self.instance.backend.xcb,
+                &self.instance.errors,
+                window,
+                ffi::XCB_ATOM_WM_CLASS,
+                ffi::XCB_ATOM_STRING,
+                false,
+                10000,
+            )
+        };
+        let res = match res {
+            Ok(res) => res,
+            Err(e) => {
+                log::warn!("Could not retrieve WM_CLASS property: {}", e);
+                return;
+            }
+        };
+        let mut parts = res.split(|b| *b == 0);
+        let instance = parts.next().and_then(|b| std::str::from_utf8(b).ok());
+        let class = parts.next().and_then(|b| std::str::from_utf8(b).ok());
+        *win.instance.borrow_mut() = instance.map(|s| s.to_owned());
+        *win.class.borrow_mut() = class.map(|s| s.to_owned());
+        log::info!("Class updated: {:?}", class);
+        log::info!("Instance updated: {:?}", instance);
+        win.upgade();
+        data.changed();
+    }
+
+    fn handle_wm_protocols(&mut self, window: ffi::xcb_window_t) {
+        let mut data = self.instance.wm_data.lock();
+        let win = match data.window(window) {
+            Some(win) => win,
+            None => {
+                return;
+            }
+        };
+        let res = unsafe {
+            xcb_dl_util::property::get_property::<u32>(
+                &self.instance.backend.xcb,
+                &self.instance.errors,
+                window,
+                self.instance.atoms.wm_protocols,
+                ffi::XCB_ATOM_ATOM,
+                false,
+                10000,
+            )
+        };
+        let res = match res {
+            Ok(res) => res,
+            Err(e) => {
+                log::warn!("Could not retrieve WM_PROTOCOLS property: {}", e);
+                return;
+            }
+        };
+        let mut protocols = Protocols::empty();
+        for protocol in res {
+            if protocol == self.instance.atoms.net_wm_ping {
+                protocols |= Protocols::PING;
+            } else if protocol == self.instance.atoms.wm_delete_window {
+                protocols |= Protocols::DELETE_WINDOW;
+            }
+        }
+        log::info!("WM_PROTOCOLS updated: {:?}", protocols);
+        win.protocols.set(protocols);
+        win.upgade();
+        data.changed();
+    }
+
+    fn handle_wm_normal_hints(&mut self, window: ffi::xcb_window_t) {
+        let mut data = self.instance.wm_data.lock();
+        let win = match data.window(window) {
+            Some(win) => win,
+            None => {
+                return;
+            }
+        };
+        let res = unsafe {
+            xcb_dl_util::property::get_property::<u32>(
+                &self.instance.backend.xcb,
+                &self.instance.errors,
+                window,
+                ffi::XCB_ATOM_WM_NORMAL_HINTS,
+                ffi::XCB_ATOM_WM_SIZE_HINTS,
+                false,
+                10000,
+            )
+        };
+        let res = match res {
+            Ok(res) => res,
+            Err(e) => {
+                log::warn!("Could not retrieve normal hints property: {}", e);
+                return;
+            }
+        };
+        let res = match XcbSizeHints::try_from(&*res) {
+            Ok(res) => res,
+            Err(e) => {
+                log::warn!(
+                    "Could not covert normal hints property to normal hints: {}",
+                    e
+                );
+                return;
+            }
+        };
+        if res.flags.contains(XcbSizeHintsFlags::P_MIN_SIZE) {
+            win.min_size.set(Some((res.min_width, res.min_height)));
+        } else {
+            win.min_size.set(None);
+        }
+        if res.flags.contains(XcbSizeHintsFlags::P_MAX_SIZE) {
+            win.max_size.set(Some((res.max_width, res.max_height)));
+        } else {
+            win.max_size.set(None);
+        }
+        log::info!("Normal hints updated for {}: {:?}", win.id, res);
+        win.upgade();
+        data.changed();
+    }
+
+    fn handle_wm_name(&mut self, window: ffi::xcb_window_t) {
+        if let Some(n) = self.handle_wm_name_(
+            window,
+            "wm name",
+            ffi::XCB_ATOM_WM_NAME,
+            ffi::XCB_ATOM_STRING,
+        ) {
+            let mut data = self.instance.wm_data.lock();
+            let win = match data.window(window) {
+                Some(win) => win,
+                None => return,
+            };
+            *win.wm_name.borrow_mut() = n;
+            win.upgade();
+            data.changed();
+        }
+    }
+
+    fn handle_wm_name_(
+        &mut self,
+        window: ffi::xcb_window_t,
+        atom_name: &str,
+        atom: ffi::xcb_atom_t,
+        ty: ffi::xcb_atom_t,
+    ) -> Option<String> {
+        let res = unsafe {
+            xcb_dl_util::property::get_property::<u8>(
+                &self.instance.backend.xcb,
+                &self.instance.errors,
+                window,
+                atom,
+                ty,
+                false,
+                10000,
+            )
+        };
+        let name = match res {
+            Ok(h) => h,
+            Err(e) => {
+                log::warn!("Could not retrieve {}: {}", atom_name, e);
+                return None;
+            }
+        };
+        match String::from_utf8(name) {
+            Ok(n) => Some(n),
+            _ => {
+                log::warn!("{} is not utf8", atom_name);
+                None
+            }
+        }
+    }
+
+    fn handle_motif_wm_hints(&mut self, window: ffi::xcb_window_t) {
+        let mut data = self.instance.wm_data.lock();
+        let win = match data.window(window) {
+            Some(win) => win,
+            None => {
+                return;
+            }
+        };
+        let res = unsafe {
+            xcb_dl_util::property::get_property::<u32>(
+                &self.instance.backend.xcb,
+                &self.instance.errors,
+                window,
+                self.instance.atoms.motif_wm_hints,
+                self.instance.atoms.motif_wm_hints,
+                false,
+                10000,
+            )
+        };
+        let hints = match res {
+            Ok(h) => h,
+            Err(e) => {
+                log::warn!("Could not retrieve motif wm hints: {}", e);
+                return;
+            }
+        };
+        if hints.len() < 5 {
+            log::warn!("Motif hints property is too small");
+            return;
+        }
+        const MWM_HINTS_FUNCTIONS: u32 = 1 << 0;
+        const MWM_HINTS_DECORATIONS: u32 = 1 << 1;
+        const MWM_FUNC_ALL: u32 = 1 << 0;
+        const MWM_FUNC_RESIZE: u32 = 1 << 1;
+        const MWM_FUNC_MOVE: u32 = 1 << 2;
+        const MWM_FUNC_MINIMIZE: u32 = 1 << 3;
+        const MWM_FUNC_MAXIMIZE: u32 = 1 << 4;
+        const MWM_FUNC_CLOSE: u32 = 1 << 5;
+        let flags = hints[0];
+        let functions = hints[1];
+        let decorations = hints[2];
+        win.decorations.set(flags & 2 == 0 || decorations != 0);
+        win.maximizable.set(flags & MWM_HINTS_FUNCTIONS == 0 || (functions & MWM_FUNC_ALL != 0) != (functions & MWM_FUNC_MAXIMIZE != 0));
+        win.upgade();
+        data.changed();
+    }
+
+    fn handle_configure_notify(&mut self, event: &ffi::xcb_generic_event_t) {
+        let event = unsafe { &*(event as *const _ as *const ffi::xcb_configure_notify_event_t) };
+        let mut data = self.instance.wm_data.lock();
+        log::info!(
+            "Window {} configured: {}x{} + {}x{} (border: {})",
+            event.window,
+            event.x,
+            event.y,
+            event.width,
+            event.height,
+            event.border_width,
+        );
+        if let Some(win) = data.window(event.window) {
+            win.width.set(event.width as _);
+            win.height.set(event.height as _);
+            win.upgade();
+            data.changed();
+        } else if let Some(win) = data.parent(event.window) {
+            win.x.set(event.x as _);
+            win.y.set(event.y as _);
+            win.border.set(event.border_width as _);
+            win.upgade();
+            data.changed();
+        }
     }
 
     fn handle_configure_request(&mut self, event: &ffi::xcb_generic_event_t) {
         let event = unsafe { &*(event as *const _ as *const ffi::xcb_configure_request_event_t) };
+        log::info!(
+            "Window {} configure request: {}x{} + {}x{}",
+            event.window,
+            event.x,
+            event.y,
+            event.width,
+            event.height
+        );
+        let data = self.instance.wm_data.lock();
+        let win = match data.window(event.window) {
+            Some(w) => w,
+            _ => return,
+        };
         unsafe {
             let list = ffi::xcb_configure_window_value_list_t {
                 x: event.x as _,
                 y: event.y as _,
                 width: event.width as _,
-                height: event.height as _,
+                height: (TITLE_HEIGHT + event.height) as _,
                 border_width: event.border_width as _,
                 sibling: event.sibling as _,
                 stack_mode: event.stack_mode as _,
             };
             let cookie = self.instance.backend.xcb.xcb_configure_window_aux_checked(
                 self.instance.c,
-                event.window,
+                win.parent_id.get(),
                 event.value_mask,
                 &list,
             );
@@ -108,54 +611,73 @@ impl Wm {
                 .errors
                 .check_cookie(&self.instance.backend.xcb, cookie);
             if let Err(e) = error {
-                log::error!("Could not configure window: {}", e);
+                log::warn!("Could not configure parent window: {}", e);
+            }
+            let list = ffi::xcb_configure_window_value_list_t {
+                width: event.width as _,
+                height: event.height as _,
+                ..Default::default()
+            };
+            let cookie = self.instance.backend.xcb.xcb_configure_window_aux_checked(
+                self.instance.c,
+                event.window,
+                (ffi::XCB_CONFIG_WINDOW_WIDTH | ffi::XCB_CONFIG_WINDOW_HEIGHT) as _,
+                &list,
+            );
+            let error = self
+                .instance
+                .errors
+                .check_cookie(&self.instance.backend.xcb, cookie);
+            if let Err(e) = error {
+                log::warn!("Could not configure window: {}", e);
             }
         }
     }
 
     fn handle_map_request(&mut self, event: &ffi::xcb_generic_event_t) {
         let event = unsafe { &*(event as *const _ as *const ffi::xcb_map_request_event_t) };
+        log::info!("Map request: {}", event.window);
+        let data = self.instance.wm_data.lock();
+        let win = match data.window(event.window) {
+            Some(w) => w,
+            _ => return,
+        };
+        win.desired_state.set(WindowState::Normal);
         unsafe {
-            let cookie = self
-                .instance
-                .backend
-                .xcb
-                .xcb_map_window_checked(self.instance.c, event.window);
-            let error = self
-                .instance
-                .errors
-                .check_cookie(&self.instance.backend.xcb, cookie);
-            if let Err(e) = error {
-                log::error!("Could not map window: {}", e);
+            for w in [win.parent_id.get(), event.window] {
+                let cookie = self
+                    .instance
+                    .backend
+                    .xcb
+                    .xcb_map_window_checked(self.instance.c, w);
+                let error = self
+                    .instance
+                    .errors
+                    .check_cookie(&self.instance.backend.xcb, cookie);
+                if let Err(e) = error {
+                    log::warn!("Could not map window: {}", e);
+                }
             }
         }
-    }
-
-    fn handle_create_notify(&mut self, event: &ffi::xcb_generic_event_t) {
-        let event = unsafe { &*(event as *const _ as *const ffi::xcb_create_notify_event_t) };
-        log::info!("Window created: {}", event.window);
-        let mut data = self.instance.wm_data.lock();
-        data.windows.push(WindowData {
-            id: event.window,
-            mapped: false,
-        });
-        data.changed();
-    }
-
-    fn handle_destroy_notify(&mut self, event: &ffi::xcb_generic_event_t) {
-        let event = unsafe { &*(event as *const _ as *const ffi::xcb_destroy_notify_event_t) };
-        log::info!("Window destroyed: {}", event.window);
-        let mut data = self.instance.wm_data.lock();
-        data.windows.retain(|w| w.id != event.window);
-        data.changed();
     }
 
     fn handle_map_notify(&mut self, event: &ffi::xcb_generic_event_t) {
         let event = unsafe { &*(event as *const _ as *const ffi::xcb_map_notify_event_t) };
         log::info!("Window mapped: {}", event.window);
         let mut data = self.instance.wm_data.lock();
-        if let Some(w) = data.windows.iter_mut().find(|w| w.id == event.window) {
-            w.mapped = true;
+        if let Some(win) = data.window(event.window) {
+            win.current_state.set(WindowState::Normal);
+            win.update_wm_state();
+            if win.desired_state.get() != WindowState::Normal {
+                unsafe {
+                    self.instance
+                        .backend
+                        .xcb
+                        .xcb_unmap_window(self.instance.c, win.id);
+                }
+            }
+            win.mapped.set(true);
+            win.upgade();
             data.changed();
         }
     }
@@ -164,9 +686,261 @@ impl Wm {
         let event = unsafe { &*(event as *const _ as *const ffi::xcb_unmap_notify_event_t) };
         log::info!("Window unmapped: {}", event.window);
         let mut data = self.instance.wm_data.lock();
-        if let Some(w) = data.windows.iter_mut().find(|w| w.id == event.window) {
-            w.mapped = false;
+        if let Some(win) = data.window(event.window) {
+            if win.desired_state.get() == WindowState::Iconic {
+                win.current_state.set(WindowState::Iconic);
+            } else {
+                win.current_state.set(WindowState::Withdrawn);
+            }
+            win.update_wm_state();
+            win.mapped.set(false);
+            win.upgade();
             data.changed();
         }
+    }
+
+    fn handle_wm_change_state(&mut self, event: &ffi::xcb_client_message_event_t) {
+        let mut data = self.instance.wm_data.lock();
+        let data32 = unsafe { event.data.data32 };
+        let win = match data.window(event.window) {
+            Some(w) => w,
+            _ => return,
+        };
+        if data32[0] == 3 {
+            win.desired_state.set(WindowState::Iconic);
+            if win.mapped.get() {
+                unsafe {
+                    self.instance
+                        .backend
+                        .xcb
+                        .xcb_unmap_window(self.instance.c, win.id);
+                }
+            }
+        }
+        win.upgade();
+        data.changed();
+    }
+
+    fn handle_create_notify(&mut self, event: &ffi::xcb_generic_event_t) {
+        let event = unsafe { &*(event as *const _ as *const ffi::xcb_create_notify_event_t) };
+        log::info!(
+            "Window created: {}: {}x{} + {}x{}",
+            event.window,
+            event.x,
+            event.y,
+            event.width,
+            event.height
+        );
+        let mut data = self.instance.wm_data.lock();
+        let win = match data.window(event.window) {
+            Some(win) => win,
+            _ => return,
+        };
+        let instance = &self.instance;
+        let c = instance.c;
+        let xcb = &self.instance.backend.xcb;
+        unsafe {
+            win.parent_id.set(xcb.xcb_generate_id(c));
+            let em =
+                ffi::XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | ffi::XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT;
+            let cookie = xcb.xcb_create_window_checked(
+                c,
+                instance.screen.root_depth,
+                win.parent_id.get(),
+                instance.screen.root,
+                event.x,
+                event.y,
+                event.width,
+                event.height + TITLE_HEIGHT,
+                event.border_width,
+                ffi::XCB_WINDOW_CLASS_INPUT_OUTPUT as _,
+                instance.screen.root_visual,
+                ffi::XCB_CW_EVENT_MASK,
+                &em as *const _ as _,
+            );
+            if let Err(e) = instance.errors.check_cookie(xcb, cookie) {
+                log::error!("Could not create parent window: {}", e);
+                return;
+            }
+            log::info!("Reparenting {} under {}", event.window, win.parent_id.get());
+            let cookie = xcb.xcb_reparent_window_checked(
+                c,
+                event.window,
+                win.parent_id.get(),
+                0,
+                TITLE_HEIGHT as i16,
+            );
+            if let Err(e) = instance.errors.check_cookie(xcb, cookie) {
+                log::error!("Could not reparent window: {}", e);
+                return;
+            }
+            let events = ffi::XCB_EVENT_MASK_PROPERTY_CHANGE;
+            let cookie = xcb.xcb_change_window_attributes_checked(
+                c,
+                event.window,
+                ffi::XCB_CW_EVENT_MASK,
+                &events as *const _ as _,
+            );
+            if let Err(e) = instance.errors.check_cookie(xcb, cookie) {
+                log::warn!("Could not select events on window {}: {}", event.window, e);
+            }
+            data.parents
+                .insert(win.parent_id.get(), Arc::downgrade(&win));
+            drop(data);
+            self.handle_wm_name(event.window);
+            self.handle_net_wm_name(event.window);
+            self.handle_motif_wm_hints(event.window);
+            self.handle_wm_normal_hints(event.window);
+            self.handle_wm_hints(event.window);
+            self.handle_wm_class(event.window);
+            self.handle_wm_protocols(event.window);
+        }
+        win.x.set(event.x as _);
+        win.y.set(event.y as _);
+        win.border.set(event.border_width as _);
+        win.width.set(event.width as _);
+        win.height.set(event.height as _);
+        win.created.set(true);
+        win.upgade();
+        self.instance.wm_data.lock().changed();
+        self.update_client_list();
+    }
+
+    fn update_client_list(&mut self) {
+        let data = self.instance.wm_data.lock();
+        let mut windows = vec![];
+        for win in data.windows.values() {
+            if let Some(win) = win.upgrade() {
+                if win.created.get() && !win.destroyed.get() {
+                    windows.push(win.id);
+                }
+            }
+        }
+        unsafe {
+            let cookie = self.instance.backend.xcb.xcb_change_property_checked(
+                self.instance.c,
+                ffi::XCB_PROP_MODE_REPLACE as _,
+                self.instance.screen.root,
+                self.instance.atoms.net_client_list,
+                ffi::XCB_ATOM_WINDOW,
+                32,
+                windows.len() as _,
+                windows.as_ptr() as *const _,
+            );
+            if let Err(e) = self
+                .instance
+                .errors
+                .check_cookie(&self.instance.backend.xcb, cookie)
+            {
+                log::warn!("Could not update _NET_CLIENT_LIST: {}", e);
+            }
+        }
+    }
+
+    fn handle_reparent_notify(&mut self, event: &ffi::xcb_generic_event_t) {
+        let event = unsafe { &*(event as *const _ as *const ffi::xcb_reparent_notify_event_t) };
+        log::info!(
+            "Window reparented: {} under {} at {}x{}",
+            event.window,
+            event.parent,
+            event.x,
+            event.y
+        );
+    }
+
+    fn handle_destroy_notify(&mut self, event: &ffi::xcb_generic_event_t) {
+        let event = unsafe { &*(event as *const _ as *const ffi::xcb_destroy_notify_event_t) };
+        log::info!("Window destroyed: {}", event.window);
+        let mut data = self.instance.wm_data.lock();
+        if let Some(win) = data.window(event.window) {
+            win.destroyed.set(true);
+            win.upgade();
+            data.changed();
+        }
+        drop(data);
+        self.update_client_list();
+    }
+
+    fn handle_client_message(&mut self, event: &ffi::xcb_generic_event_t) {
+        let event = unsafe { &*(event as *const _ as *const ffi::xcb_client_message_event_t) };
+        if event.type_ == self.instance.atoms.net_wm_state && event.format == 32 {
+            log::warn!("NET_WM_STATE client message: {:?}", event);
+            self.handle_net_wm_state(event);
+        } else if event.type_ == self.instance.atoms.wm_protocols && event.format == 32 {
+            log::warn!("NET_WM_PROTOCOLS client message: {:?}", event);
+            self.handle_net_wm_protocols(event);
+        // } else if event.type_ == self.instance.atoms.net_active_window && event.format == 32 {
+        //     log::warn!("NET_ACTIVE_WINDOW client message: {:?}", event);
+        //     self.handle_net_active_window(event);
+        } else if event.type_ == self.instance.atoms.wm_change_state && event.format == 32 {
+            log::warn!("WM_CHANGE_STATE client message: {:?}", event);
+            self.handle_wm_change_state(event);
+        } else {
+            log::warn!("Received unexpected client message: {:?}", event);
+        }
+    }
+
+    // fn handle_net_active_window(&mut self, event: &ffi::xcb_client_message_event_t) {
+    //     let mut data = self.instance.wm_data.lock();
+    //     let win = match data.window(event.window) {
+    //         Some(w) => w,
+    //         _ => return,
+    //     };
+    //     if win.state.get() == WindowState::Iconic {
+    //         win.state.set(WindowState::Normal);
+    //         win.update_wm_state();
+    //         unsafe {
+    //             self.instance
+    //                 .backend
+    //                 .xcb
+    //                 .xcb_map_window(self.instance.c, win.id);
+    //         }
+    //     }
+    //     win.upgade();
+    //     data.changed();
+    // }
+
+    fn handle_net_wm_protocols(&mut self, event: &ffi::xcb_client_message_event_t) {
+        let mut data = self.instance.wm_data.lock();
+        let data32 = unsafe { event.data.data32 };
+        if data32[0] == self.instance.atoms.net_wm_ping && event.window == self.instance.screen.root
+        {
+            log::info!("Ponged {}", data32[2]);
+            data.pongs.insert(data32[2]);
+        }
+        data.changed();
+    }
+
+    fn handle_net_wm_state(&mut self, event: &ffi::xcb_client_message_event_t) {
+        let mut data = self.instance.wm_data.lock();
+        let data32 = unsafe { event.data.data32 };
+        let win = match data.window(event.window) {
+            Some(w) => w,
+            _ => return,
+        };
+        for property in [data32[1], data32[2]] {
+            let (name, property) = if property == self.instance.atoms.net_wm_state_above {
+                ("always on top", &win.always_on_top)
+            } else if property == self.instance.atoms.net_wm_state_maximized_vert {
+                ("maximized vert", &win.maximized_vert)
+            } else if property == self.instance.atoms.net_wm_state_maximized_horz {
+                ("maximized horz", &win.maximized_horz)
+            } else {
+                log::warn!("Unknown _NET_WM_STATE property {}", property);
+                continue;
+            };
+            match data32[0] {
+                0 => property.set(false),
+                1 => property.set(true),
+                2 => property.set(!property.get()),
+                _ => {
+                    log::warn!("Unknown _NET_WM_STATE operation {}", data32[0]);
+                    continue;
+                }
+            }
+            log::info!("Window {} {}: {}", name, property.get(), event.window);
+        }
+        win.upgade();
+        data.changed();
     }
 }

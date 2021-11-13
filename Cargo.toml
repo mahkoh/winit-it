@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-#winit = { path = "../winit" }
-winit = { git = "https://github.com/mahkoh/winit", rev = "2b1a823de9d84c64fe536fbcd5f112ba46c09cc4" }
+winit = { path = "../winit" }
+#winit = { git = "https://github.com/mahkoh/winit", rev = "2b1a823de9d84c64fe536fbcd5f112ba46c09cc4" }
 log = "0.4.14"
 libc = "0.2.105"
 uapi = "0.2.2"

@@ -18,6 +18,7 @@ enum MessageType {
   MT_CREATE_KEYBOARD_REPLY,
   MT_KEY_PRESS,
   MT_KEY_RELEASE,
+  MT_REMOVE_DEVICE,
 };
 
 typedef struct {
@@ -32,6 +33,10 @@ typedef union {
     uint32_t id;
     uint32_t key;
   } key_press;
+  struct {
+    uint32_t type;
+    uint32_t id;
+  } remove_device;
 } Message;
 
 static void handle_message(int fd, void *closure) {
@@ -52,6 +57,9 @@ static void handle_message(int fd, void *closure) {
     break;
   case MT_KEY_RELEASE:
     input_key_release(message.key_press.id, message.key_press.key);
+    break;
+  case MT_REMOVE_DEVICE:
+    input_remove_device(message.remove_device.id);
     break;
   default:
     LogMessage(X_ERROR, "Invalid message type %u\n", message.type);

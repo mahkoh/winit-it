@@ -1,12 +1,15 @@
-use crate::event::{Event, WindowEvent, WindowEventExt, WindowKeyboardInput};
-use crate::keyboard::Key;
+use crate::event::{
+    DeviceEvent, DeviceEventExt, Event, WindowEvent, WindowEventExt, WindowKeyboardInput,
+};
+use crate::keyboard::{Key, Layout};
 use std::any::Any;
 use std::fmt::Display;
 use std::future::Future;
 use std::pin::Pin;
-use winit::dpi::{Position, Size};
+use winit::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
+use winit::event::DeviceId;
 use winit::keyboard::ModifiersState;
-use winit::window::{UserAttentionType, Window as WWindow, WindowBuilder};
+use winit::window::{Icon, UserAttentionType, Window as WWindow, WindowBuilder, WindowId};
 
 bitflags::bitflags! {
     pub struct BackendFlags: u32 {
@@ -23,6 +26,12 @@ bitflags::bitflags! {
         const WINIT_SET_MINIMIZED = 1 << 10;
         const WINIT_SET_VISIBLE = 1 << 11;
         const WINIT_SET_RESIZABLE = 1 << 12;
+        const WINIT_TRANSPARENCY = 1 << 13;
+        const WINIT_SET_ICON = 1 << 14;
+        const SET_OUTER_POSITION = 1 << 15;
+        const SET_INNER_SIZE = 1 << 16;
+        const DEVICE_ADDED = 1 << 17;
+        const DEVICE_REMOVED = 1 << 18;
     }
 }
 
@@ -51,6 +60,56 @@ impl dyn EventLoop {
             if let Event::WindowEvent(we) = self.event().await {
                 return we;
             }
+        }
+    }
+
+    pub async fn device_event(&self) -> DeviceEventExt {
+        loop {
+            if let Event::DeviceEvent(we) = self.event().await {
+                return we;
+            }
+        }
+    }
+
+    pub async fn device_added_event(&self) -> DeviceEventExt {
+        log::info!("Waiting for device added event");
+        loop {
+            let de = self.device_event().await;
+            if de.event == DeviceEvent::Added {
+                return de;
+            }
+        }
+    }
+
+    pub async fn device_removed_event(&self) -> DeviceEventExt {
+        log::info!("Waiting for device removed event");
+        loop {
+            let de = self.device_event().await;
+            if de.event == DeviceEvent::Removed {
+                return de;
+            }
+        }
+    }
+
+    pub async fn window_move_event(&self) -> (WindowEventExt, PhysicalPosition<i32>) {
+        log::debug!("Awaiting window move");
+        loop {
+            let we = self.window_event().await;
+            if let WindowEvent::Moved(pos) = &we.event {
+                log::debug!("Got window move");
+                return (we.clone(), pos.clone());
+            };
+        }
+    }
+
+    pub async fn window_resize_event(&self) -> (WindowEventExt, PhysicalSize<u32>) {
+        log::debug!("Awaiting window resize");
+        loop {
+            let we = self.window_event().await;
+            if let WindowEvent::Resized(pos) = &we.event {
+                log::debug!("Got window resize");
+                return (we.clone(), pos.clone());
+            };
         }
     }
 
@@ -90,6 +149,19 @@ impl dyn EventLoop {
     }
 }
 
+#[derive(Clone, Eq, PartialEq)]
+pub struct BackendIcon {
+    pub rgba: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Into<Icon> for BackendIcon {
+    fn into(self) -> Icon {
+        Icon::from_rgba(self.rgba, self.width, self.height).unwrap()
+    }
+}
+
 pub trait WindowProperties {
     fn mapped(&self) -> bool;
     fn always_on_top(&self) -> bool;
@@ -104,7 +176,9 @@ pub trait WindowProperties {
     fn maximized(&self) -> Option<bool>;
     fn minimized(&self) -> Option<bool>;
     fn resizable(&self) -> Option<bool>;
+    fn icon(&self) -> Option<BackendIcon>;
     fn attention(&self) -> bool;
+    fn supports_transparency(&self) -> bool;
     fn class(&self) -> Option<String> {
         unimplemented!();
     }
@@ -125,6 +199,16 @@ pub trait Window {
     fn delete(&self);
     /// left, right, top, bottom
     fn frame_extents(&self) -> (u32, u32, u32, u32);
+    fn set_outer_position(&self, x: i32, y: i32) {
+        let _ = x;
+        let _ = y;
+        unimplemented!();
+    }
+    fn set_inner_size(&self, width: u32, height: u32) {
+        let _ = width;
+        let _ = height;
+        unimplemented!();
+    }
     fn ping<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
         unimplemented!();
     }
@@ -177,6 +261,10 @@ impl dyn Window {
         self.winit().set_outer_position(size);
     }
 
+    pub fn winit_id(&self) -> WindowId {
+        self.winit().id()
+    }
+
     pub fn winit_set_minimized(&self, minimized: bool) {
         log::info!(
             "Setting minimized of window {} to {:?}",
@@ -213,8 +301,21 @@ impl dyn Window {
     }
 
     pub fn winit_set_resizable(&self, resizable: bool) {
-        log::info!("Setting resizable of window {} to {:?}", self.id(), resizable);
+        log::info!(
+            "Setting resizable of window {} to {:?}",
+            self.id(),
+            resizable
+        );
         self.winit().set_resizable(resizable);
+    }
+
+    pub fn winit_set_window_icon(&self, icon: Option<Icon>) {
+        log::info!(
+            "Setting window icon of window {} to {}",
+            self.id(),
+            icon.is_some()
+        );
+        self.winit().set_window_icon(icon);
     }
 
     pub async fn mapped(&self, mapped: bool) {
@@ -261,6 +362,15 @@ impl dyn Window {
         );
         self.await_property(|p| p.width() == width && p.height() == height)
             .await
+    }
+
+    pub async fn icon(&self, icon: Option<&BackendIcon>) {
+        log::info!(
+            "Waiting for window {} to become icon {}",
+            self.id(),
+            icon.is_some()
+        );
+        self.await_property(|p| p.icon().as_ref() == icon).await;
     }
 
     pub fn inner_offset(&self) -> (i32, i32) {
@@ -351,9 +461,8 @@ impl dyn Window {
             self.id(),
             resizable,
         );
-        self.await_property(|p| {
-            p.resizable() == Some(resizable)
-        }).await
+        self.await_property(|p| p.resizable() == Some(resizable))
+            .await
     }
 
     pub async fn winit_inner_size(&self, width: u32, height: u32) {
@@ -416,10 +525,19 @@ pub trait Seat {
     fn focus(&self, window: &dyn Window);
 }
 
-pub trait Keyboard {
-    fn press(&self, key: Key) -> Box<dyn PressedKey>;
+pub trait BackendDeviceId {
+    fn is(&self, device: DeviceId) -> bool;
 }
 
-pub trait Mouse {}
+pub trait Device {
+    fn id(&self) -> Box<dyn BackendDeviceId>;
+}
+
+pub trait Keyboard: Device {
+    fn press(&self, key: Key) -> Box<dyn PressedKey>;
+    fn set_layout(&self, layout: Layout);
+}
+
+pub trait Mouse: Device {}
 
 pub trait PressedKey {}

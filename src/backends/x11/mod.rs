@@ -1,10 +1,11 @@
 use crate::backend::{
-    Backend, BackendFlags, EventLoop, Instance, Keyboard, Mouse, PressedKey, Seat, Window,
-    WindowProperties,
+    Backend, BackendDeviceId, BackendFlags, BackendIcon, Device, EventLoop, Instance, Keyboard,
+    Mouse, PressedKey, Seat, Window, WindowProperties,
 };
 use crate::backends::x11::wm::TITLE_HEIGHT;
+use crate::backends::x11::MessageType::MT_REMOVE_DEVICE;
 use crate::event::{map_event, Event, UserEvent};
-use crate::keyboard::Key;
+use crate::keyboard::{Key, Layout};
 use parking_lot::Mutex;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -13,23 +14,29 @@ use std::fmt::Display;
 use std::future::Future;
 use std::pin::Pin;
 use std::process::Command;
-use std::ptr;
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Waker};
+use std::{mem, ptr};
 use tokio::io::unix::AsyncFd;
 use tokio::io::Interest;
 use tokio::task::JoinHandle;
 use uapi::c::{AF_UNIX, O_CLOEXEC, SOCK_CLOEXEC, SOCK_SEQPACKET};
 use uapi::{pipe2, socketpair, IntoUstr, OwnedFd, Pod, UapiReadExt, UstrPtr};
+use winit::event::DeviceId;
 use winit::event_loop::{ControlFlow, EventLoop as WEventLoop};
 use winit::platform::run_return::EventLoopExtRunReturn;
-use winit::platform::unix::{EventLoopExtUnix, EventLoopWindowTargetExtUnix, WindowExtUnix};
+use winit::platform::unix::{
+    DeviceIdExtUnix, EventLoopExtUnix, EventLoopWindowTargetExtUnix, WindowExtUnix,
+};
 use winit::window::{Window as WWindow, WindowBuilder};
-use xcb_dl::{ffi, Xcb, XcbXinput};
+use xcb_dl::{ffi, Xcb, XcbRender, XcbXinput, XcbXkb};
 use xcb_dl_util::error::XcbErrorParser;
 use MessageType::{MT_CREATE_KEYBOARD, MT_CREATE_KEYBOARD_REPLY, MT_KEY_PRESS, MT_KEY_RELEASE};
+use crate::backends::x11::layout::{Layouts, layouts};
 
 mod evdev;
+mod keysyms;
+mod layout;
 mod wm;
 
 static ENV_LOCK: Mutex<()> = parking_lot::const_mutex(());
@@ -55,6 +62,9 @@ pub fn backend() -> Box<dyn Backend> {
                 .to_string(),
             xcb: Xcb::load_loose().unwrap(),
             xinput: XcbXinput::load_loose().unwrap(),
+            render: XcbRender::load_loose().unwrap(),
+            xkb: XcbXkb::load_loose().unwrap(),
+            layouts: layouts(),
         }))
     }
 }
@@ -64,49 +74,10 @@ struct XBackend {
     default_module_path: String,
     xcb: Xcb,
     xinput: XcbXinput,
+    render: XcbRender,
+    xkb: XcbXkb,
+    layouts: Layouts,
 }
-
-struct XInstanceData {
-    backend: Arc<XBackend>,
-    screen: ffi::xcb_screen_t,
-    xserver_pid: libc::pid_t,
-    sock: OwnedFd,
-    display: u32,
-    c: *mut ffi::xcb_connection_t,
-    fd: libc::c_int,
-    errors: XcbErrorParser,
-    core_p: ffi::xcb_input_device_id_t,
-    core_kb: ffi::xcb_input_device_id_t,
-    wm_data: Mutex<WmData>,
-    atoms: Atoms,
-}
-
-impl XInstanceData {
-    fn atom(&self, name: &str) -> ffi::xcb_atom_t {
-        unsafe {
-            let mut err = ptr::null_mut();
-            let reply = self.backend.xcb.xcb_intern_atom_reply(
-                self.c,
-                self.backend
-                    .xcb
-                    .xcb_intern_atom(self.c, 0, name.len() as _, name.as_ptr() as _),
-                &mut err,
-            );
-            self.errors
-                .check(&self.backend.xcb, reply, err)
-                .unwrap()
-                .atom
-        }
-    }
-}
-
-struct XInstance {
-    data: Arc<XInstanceData>,
-    wm: Option<JoinHandle<()>>,
-}
-
-unsafe impl Send for XInstance {}
-unsafe impl Sync for XInstance {}
 
 impl Backend for Arc<XBackend> {
     fn instantiate(&self) -> Box<dyn Instance> {
@@ -179,28 +150,67 @@ impl Backend for Arc<XBackend> {
             .unwrap();
         log::trace!("display: {}", display);
 
-        let (c, parser) = unsafe {
-            let display_str = uapi::format_ustr!(":{}", display);
-            let c = self.xcb.xcb_connect(display_str.as_ptr(), ptr::null_mut());
-            let parser = XcbErrorParser::new(&self.xcb, c);
-            parser.check_connection(&self.xcb).unwrap();
-            (c, parser)
+        let mut instance = XInstanceData {
+            backend: self.clone(),
+            xserver_pid: chpid,
+            sock: psock,
+            display,
+            wm_data: Mutex::new(WmData {
+                wakers: vec![],
+                windows: Default::default(),
+                parents: Default::default(),
+                pongs: Default::default(),
+            }),
+            atoms: Default::default(),
         };
 
+        let c = XConnection::new(self, display);
+
+        instance.atoms.net_wm_state = c.atom("_NET_WM_STATE");
+        instance.atoms.wm_change_state = c.atom("WM_CHANGE_STATE");
+        instance.atoms.wm_state = c.atom("WM_STATE");
+        instance.atoms.net_wm_name = c.atom("_NET_WM_NAME");
+        instance.atoms.net_wm_icon = c.atom("_NET_WM_ICON");
+        instance.atoms.wm_delete_window = c.atom("WM_DELETE_WINDOW");
+        instance.atoms.net_wm_ping = c.atom("_NET_WM_PING");
+        instance.atoms.utf8_string = c.atom("UTF8_STRING");
+        instance.atoms.net_wm_state_above = c.atom("_NET_WM_STATE_ABOVE");
+        instance.atoms.net_frame_extents = c.atom("_NET_FRAME_EXTENTS");
+        instance.atoms.net_wm_state_maximized_horz = c.atom("_NET_WM_STATE_MAXIMIZED_HORZ");
+        instance.atoms.net_wm_state_maximized_vert = c.atom("_NET_WM_STATE_MAXIMIZED_VERT");
+        instance.atoms.motif_wm_hints = c.atom("_MOTIF_WM_HINTS");
+        instance.atoms.wm_name = c.atom("WM_NAME");
+        instance.atoms.wm_normal_hints = c.atom("WM_NORMAL_HINTS");
+        instance.atoms.wm_hints = c.atom("WM_HINTS");
+        instance.atoms.wm_class = c.atom("WM_CLASS");
+        instance.atoms.wm_protocols = c.atom("WM_PROTOCOLS");
+        instance.atoms.net_active_window = c.atom("_NET_ACTIVE_WINDOW");
+        instance.atoms.net_supported = c.atom("_NET_SUPPORTED");
+        instance.atoms.net_client_list = c.atom("_NET_CLIENT_LIST");
+        instance.atoms.net_client_list_stacking = c.atom("_NET_CLIENT_LIST_STACKING");
+        instance.atoms.net_frame_extents = c.atom("_NET_FRAME_EXTENTS");
+        instance.atoms.net_supporting_wm_check = c.atom("_NET_SUPPORTING_WM_CHECK");
+
+        let instance = Arc::new(instance);
+
+        let wm = Some(tokio::task::spawn_local(wm::run(instance.clone())));
+
         let (core_p, core_kb) = unsafe {
-            let cookie = self.xinput.xcb_input_xi_query_version(c, 2, 0);
             let mut err = ptr::null_mut();
+            let reply = self.xkb.xcb_xkb_use_extension_reply(c.c, self.xkb.xcb_xkb_use_extension(c.c, 1, 0), &mut err);
+            c.errors.check(&self.xcb, reply, err).unwrap();
+            let cookie = self.xinput.xcb_input_xi_query_version(c.c, 2, 0);
             let reply = self
                 .xinput
-                .xcb_input_xi_query_version_reply(c, cookie, &mut err);
-            let _reply = parser.check(&self.xcb, reply, err).unwrap();
+                .xcb_input_xi_query_version_reply(c.c, cookie, &mut err);
+            let _reply = c.errors.check(&self.xcb, reply, err).unwrap();
             let cookie = self
                 .xinput
-                .xcb_input_xi_query_device(c, ffi::XCB_INPUT_DEVICE_ALL_MASTER as _);
+                .xcb_input_xi_query_device(c.c, ffi::XCB_INPUT_DEVICE_ALL_MASTER as _);
             let reply = self
                 .xinput
-                .xcb_input_xi_query_device_reply(c, cookie, &mut err);
-            let reply = parser.check(&self.xcb, reply, err).unwrap();
+                .xcb_input_xi_query_device_reply(c.c, cookie, &mut err);
+            let reply = c.errors.check(&self.xcb, reply, err).unwrap();
             let mut iter = self
                 .xinput
                 .xcb_input_xi_query_device_infos_iterator(&*reply);
@@ -216,64 +226,12 @@ impl Backend for Arc<XBackend> {
             core.unwrap()
         };
 
-        let screen = unsafe {
-            *self
-                .xcb
-                .xcb_setup_roots_iterator(self.xcb.xcb_get_setup(c))
-                .data
-        };
-
-        let mut instance = XInstanceData {
-            backend: self.clone(),
-            screen,
-            xserver_pid: chpid,
-            sock: psock,
-            display,
-            c,
-            fd: unsafe { self.xcb.xcb_get_file_descriptor(c) },
-            errors: parser,
-            core_p,
-            core_kb,
-            wm_data: Mutex::new(WmData {
-                wakers: vec![],
-                windows: Default::default(),
-                parents: Default::default(),
-                pongs: Default::default(),
-            }),
-            atoms: Default::default(),
-        };
-
-        instance.atoms.net_wm_state = instance.atom("_NET_WM_STATE");
-        instance.atoms.wm_change_state = instance.atom("WM_CHANGE_STATE");
-        instance.atoms.wm_state = instance.atom("WM_STATE");
-        instance.atoms.net_wm_name = instance.atom("_NET_WM_NAME");
-        instance.atoms.wm_delete_window = instance.atom("WM_DELETE_WINDOW");
-        instance.atoms.net_wm_ping = instance.atom("_NET_WM_PING");
-        instance.atoms.utf8_string = instance.atom("UTF8_STRING");
-        instance.atoms.net_wm_state_above = instance.atom("_NET_WM_STATE_ABOVE");
-        instance.atoms.net_frame_extents = instance.atom("_NET_FRAME_EXTENTS");
-        instance.atoms.net_wm_state_maximized_horz = instance.atom("_NET_WM_STATE_MAXIMIZED_HORZ");
-        instance.atoms.net_wm_state_maximized_vert = instance.atom("_NET_WM_STATE_MAXIMIZED_VERT");
-        instance.atoms.motif_wm_hints = instance.atom("_MOTIF_WM_HINTS");
-        instance.atoms.wm_name = instance.atom("WM_NAME");
-        instance.atoms.wm_normal_hints = instance.atom("WM_NORMAL_HINTS");
-        instance.atoms.wm_hints = instance.atom("WM_HINTS");
-        instance.atoms.wm_class = instance.atom("WM_CLASS");
-        instance.atoms.wm_protocols = instance.atom("WM_PROTOCOLS");
-        instance.atoms.net_active_window = instance.atom("_NET_ACTIVE_WINDOW");
-        instance.atoms.net_supported = instance.atom("_NET_SUPPORTED");
-        instance.atoms.net_client_list = instance.atom("_NET_CLIENT_LIST");
-        instance.atoms.net_client_list_stacking = instance.atom("_NET_CLIENT_LIST_STACKING");
-        instance.atoms.net_frame_extents = instance.atom("_NET_FRAME_EXTENTS");
-        instance.atoms.net_supporting_wm_check = instance.atom("_NET_SUPPORTING_WM_CHECK");
-
-        let instance = Arc::new(instance);
-
-        let wm = Some(tokio::task::spawn_local(wm::run(instance.clone())));
-
         Box::new(Arc::new(XInstance {
+            c,
             data: instance.clone(),
             wm,
+            core_p,
+            core_kb,
         }))
     }
 
@@ -294,7 +252,178 @@ impl Backend for Arc<XBackend> {
             | BackendFlags::WINIT_SET_SIZE_BOUNDS
             | BackendFlags::WINIT_SET_ATTENTION
             | BackendFlags::WINIT_SET_RESIZABLE
+            | BackendFlags::WINIT_SET_ICON
+            // | BackendFlags::WINIT_TRANSPARENCY
             | BackendFlags::X11
+            | BackendFlags::SET_OUTER_POSITION
+            | BackendFlags::SET_INNER_SIZE
+            | BackendFlags::DEVICE_ADDED
+            | BackendFlags::DEVICE_REMOVED
+    }
+}
+
+struct XConnection {
+    backend: Arc<XBackend>,
+    c: *mut ffi::xcb_connection_t,
+    fd: libc::c_int,
+    errors: XcbErrorParser,
+    screen: ffi::xcb_screen_t,
+}
+
+impl XConnection {
+    fn new(backend: &Arc<XBackend>, display: u32) -> Self {
+        unsafe {
+            let display_str = uapi::format_ustr!(":{}", display);
+            let c = backend
+                .xcb
+                .xcb_connect(display_str.as_ptr(), ptr::null_mut());
+            let parser = XcbErrorParser::new(&backend.xcb, c);
+            parser.check_connection(&backend.xcb).unwrap();
+            let screen = *backend
+                .xcb
+                .xcb_setup_roots_iterator(backend.xcb.xcb_get_setup(c))
+                .data;
+            Self {
+                backend: backend.clone(),
+                c,
+                fd: backend.xcb.xcb_get_file_descriptor(c),
+                errors: parser,
+                screen,
+            }
+        }
+    }
+
+    fn atom(&self, name: &str) -> ffi::xcb_atom_t {
+        unsafe {
+            let mut err = ptr::null_mut();
+            let reply = self.backend.xcb.xcb_intern_atom_reply(
+                self.c,
+                self.backend
+                    .xcb
+                    .xcb_intern_atom(self.c, 0, name.len() as _, name.as_ptr() as _),
+                &mut err,
+            );
+            self.errors
+                .check(&self.backend.xcb, reply, err)
+                .unwrap()
+                .atom
+        }
+    }
+}
+
+impl Drop for XConnection {
+    fn drop(&mut self) {
+        unsafe {
+            self.backend.xcb.xcb_disconnect(self.c);
+        }
+    }
+}
+
+struct XInstanceData {
+    backend: Arc<XBackend>,
+    xserver_pid: libc::pid_t,
+    sock: OwnedFd,
+    display: u32,
+    wm_data: Mutex<WmData>,
+    atoms: Atoms,
+}
+
+struct XInstance {
+    c: XConnection,
+    data: Arc<XInstanceData>,
+    wm: Option<JoinHandle<()>>,
+    core_p: ffi::xcb_input_device_id_t,
+    core_kb: ffi::xcb_input_device_id_t,
+}
+
+unsafe impl Send for XInstance {}
+unsafe impl Sync for XInstance {}
+
+impl XInstance {
+    fn add_keyboard(&self) -> ffi::xcb_input_device_id_t {
+        let mut msg = Message {
+            ty: MT_CREATE_KEYBOARD as _,
+        };
+        uapi::write(self.data.sock.raw(), &msg).unwrap();
+        uapi::read(self.data.sock.raw(), &mut msg).unwrap();
+        unsafe {
+            assert_eq!(msg.ty, MT_CREATE_KEYBOARD_REPLY as _);
+            msg.create_keyboard_reply.id as _
+        }
+    }
+
+    fn assign_slave(&self, slave: ffi::xcb_input_device_id_t, master: ffi::xcb_input_device_id_t) {
+        unsafe {
+            let xcb = &self.data.backend.xcb;
+            let xinput = &self.data.backend.xinput;
+            #[repr(C)]
+            struct Change {
+                hc: ffi::xcb_input_hierarchy_change_t,
+                data: ffi::xcb_input_hierarchy_change_data_t__attach_slave,
+            }
+            let change = Change {
+                hc: ffi::xcb_input_hierarchy_change_t {
+                    type_: ffi::XCB_INPUT_HIERARCHY_CHANGE_TYPE_ATTACH_SLAVE as _,
+                    len: (mem::size_of::<Change>() / 4) as _,
+                },
+                data: ffi::xcb_input_hierarchy_change_data_t__attach_slave {
+                    deviceid: slave,
+                    master,
+                },
+            };
+            let cookie = xinput.xcb_input_xi_change_hierarchy_checked(self.c.c, 1, &change.hc);
+            if let Err(e) = self.c.errors.check_cookie(xcb, cookie) {
+                panic!("Could not assign slave to master: {}", e);
+            }
+        }
+    }
+
+    fn set_layout(&self, slave: ffi::xcb_input_device_id_t, layout: Layout, prev_layout: Option<Layout>) {
+        if Some(layout) == prev_layout {
+            return;
+        }
+        let change_map = match (layout, prev_layout) {
+            (_, None) => true,
+            (Layout::QwertySwapped, _) => true,
+            (Layout::Qwerty | Layout::Azerty, Some(Layout::QwertySwapped)) => true,
+            _ => false,
+        };
+        let backend = &self.data.backend;
+        let (group, msg) = match layout {
+            Layout::Qwerty => (1, &backend.layouts.msg1),
+            Layout::Azerty => (2, &backend.layouts.msg1),
+            Layout::QwertySwapped => (1, &backend.layouts.msg2),
+        };
+        unsafe {
+            let xcb = &self.data.backend.xcb;
+            let xkb = &self.data.backend.xkb;
+            if change_map {
+                let mut header = msg.header;
+                header.device_spec = slave;
+                let mut iovecs = [
+                    libc::iovec { iov_base: ptr::null_mut(), iov_len: 0 },
+                    libc::iovec { iov_base: ptr::null_mut(), iov_len: 0 },
+                    libc::iovec { iov_base: &mut header as *mut _ as _, iov_len: mem::size_of_val(&header) },
+                    libc::iovec { iov_base: msg.body.as_ptr() as _, iov_len: msg.body.len() },
+                ];
+                let request = ffi::xcb_protocol_request_t {
+                    count: 2,
+                    ext: xkb.xcb_xkb_id(),
+                    opcode: ffi::XCB_XKB_SET_MAP,
+                    isvoid: 1,
+                };
+                let sequence = xcb.xcb_send_request(self.c.c, ffi::XCB_REQUEST_CHECKED, &mut iovecs[2], &request);
+                let cookie = ffi::xcb_void_cookie_t { sequence };
+                if let Err(e) = self.c.errors.check_cookie(xcb, cookie) {
+                    panic!("Could not set keymap: {}", e);
+                }
+                let cookie = xkb.xcb_xkb_latch_lock_state_checked(self.c.c, slave, 0, 0, 1, group, 0, 0, 0);
+                if let Err(e) = self.c.errors.check_cookie(xcb, cookie) {
+                    panic!("Could not set keymap group: {}", e);
+                }
+                std::thread::sleep_ms(1000000000);
+            }
+        }
     }
 }
 
@@ -306,9 +435,8 @@ impl Instance for Arc<XInstance> {
     fn default_seat(&self) -> Box<dyn Seat> {
         Box::new(Arc::new(XSeat {
             instance: self.clone(),
-            is_core: true,
-            pointer: self.data.core_p,
-            keyboard: self.data.core_kb,
+            pointer: self.core_p,
+            keyboard: self.core_kb,
         }))
     }
 
@@ -358,24 +486,24 @@ impl Instance for Arc<XInstance> {
         unsafe {
             let mut err = ptr::null_mut();
             let reply = self.data.backend.xcb.xcb_get_geometry_reply(
-                self.data.c,
+                self.c.c,
                 self.data
                     .backend
                     .xcb
-                    .xcb_get_geometry(self.data.c, self.data.screen.root),
+                    .xcb_get_geometry(self.c.c, self.c.screen.root),
                 &mut err,
             );
             let attr = self
-                .data
+                .c
                 .errors
                 .check(&self.data.backend.xcb, reply, err)
                 .unwrap();
             let reply = self.data.backend.xcb.xcb_get_image_reply(
-                self.data.c,
+                self.c.c,
                 self.data.backend.xcb.xcb_get_image(
-                    self.data.c,
+                    self.c.c,
                     ffi::XCB_IMAGE_FORMAT_Z_PIXMAP as u8,
-                    self.data.screen.root,
+                    self.c.screen.root,
                     attr.x,
                     attr.y,
                     attr.width,
@@ -385,7 +513,7 @@ impl Instance for Arc<XInstance> {
                 &mut err,
             );
             let image = self
-                .data
+                .c
                 .errors
                 .check(&self.data.backend.xcb, reply, err)
                 .unwrap();
@@ -396,24 +524,6 @@ impl Instance for Arc<XInstance> {
             crate::screenshot::log_image(data, attr.width as _, attr.height as _);
         }
     }
-
-    // fn mapped<'b>(&'b self, window: &Window) -> Pin<Box<dyn Future<Output = ()> + 'b>> {
-    //     struct Wait<'a>(&'a XInstanceData, ffi::xcb_window_t);
-    //     impl<'a> Future for Wait<'a> {
-    //         type Output = ();
-    //         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-    //             let mut data = self.0.wm_data.lock();
-    //             for w in &data.windows {
-    //                 if w.id == self.1 && w.mapped {
-    //                     return Poll::Ready(());
-    //                 }
-    //             }
-    //             data.wakers.push(cx.waker().clone());
-    //             Poll::Pending
-    //         }
-    //     }
-    //     Box::pin(Wait(&self.data, window.xlib_window().unwrap() as _))
-    // }
 }
 
 struct WmData {
@@ -447,9 +557,6 @@ impl WmData {
 
 impl Drop for XInstanceData {
     fn drop(&mut self) {
-        unsafe {
-            self.backend.xcb.xcb_disconnect(self.c);
-        }
         log::info!("Killing the X server");
         uapi::kill(self.xserver_pid, libc::SIGKILL).unwrap();
         log::info!("Waiting for the X server to terminate");
@@ -479,6 +586,57 @@ struct XEventLoop {
 impl Drop for XEventLoop {
     fn drop(&mut self) {
         self.jh.take().unwrap().abort();
+    }
+}
+
+impl XEventLoop {
+    fn get_window_format(&self, id: ffi::xcb_window_t) -> ffi::xcb_render_directformat_t {
+        unsafe {
+            let instance = &self.data.instance;
+            let xcb = &instance.data.backend.xcb;
+            let render = &instance.data.backend.render;
+            let mut err = ptr::null_mut();
+            let window_visual = {
+                let reply = xcb.xcb_get_window_attributes_reply(
+                    instance.c.c,
+                    xcb.xcb_get_window_attributes(instance.c.c, id),
+                    &mut err,
+                );
+                instance.c.errors.check(xcb, reply, err).unwrap().visual
+            };
+            let formats = render.xcb_render_query_pict_formats_reply(
+                instance.c.c,
+                render.xcb_render_query_pict_formats(instance.c.c),
+                &mut err,
+            );
+            let formats = instance.c.errors.check(xcb, formats, err).unwrap();
+            let mut screens = render.xcb_render_query_pict_formats_screens_iterator(&*formats);
+            while screens.rem > 0 {
+                let mut depths = render.xcb_render_pictscreen_depths_iterator(screens.data);
+                while depths.rem > 0 {
+                    let visuals = std::slice::from_raw_parts(
+                        render.xcb_render_pictdepth_visuals(depths.data),
+                        render.xcb_render_pictdepth_visuals_length(depths.data) as _,
+                    );
+                    for visual in visuals {
+                        if visual.visual == window_visual {
+                            let formats = std::slice::from_raw_parts(
+                                render.xcb_render_query_pict_formats_formats(&*formats),
+                                formats.num_formats as _,
+                            );
+                            for format in formats {
+                                if format.id == visual.format {
+                                    return format.direct;
+                                }
+                            }
+                        }
+                    }
+                    render.xcb_render_pictdepth_next(&mut depths);
+                }
+                render.xcb_render_pictscreen_next(&mut screens);
+            }
+            unreachable!();
+        }
     }
 }
 
@@ -517,10 +675,14 @@ impl EventLoop for Arc<XEventLoop> {
 
     fn create_window(&self, builder: WindowBuilder) -> Box<dyn Window> {
         let winit = builder.build(&*self.data.el.lock()).unwrap();
+        let id = winit.xlib_window().unwrap() as _;
+        let format = self.get_window_format(id);
         log::info!("Created window {}", winit.xlib_window().unwrap());
+        log::info!("Pixel format: {:?}", format);
         let win = Arc::new(XWindow {
             el: self.clone(),
-            id: winit.xlib_window().unwrap() as _,
+            id,
+            format,
             parent_id: Cell::new(0),
             winit: Some(winit),
             property_generation: Cell::new(0),
@@ -548,6 +710,7 @@ impl EventLoop for Arc<XEventLoop> {
             desired_state: Cell::new(WindowState::Withdrawn),
             current_state: Cell::new(WindowState::Withdrawn),
             maximizable: Cell::new(true),
+            icon: RefCell::new(None),
         });
         self.data
             .instance
@@ -577,6 +740,7 @@ enum WindowState {
 struct XWindow {
     el: Arc<XEventLoop>,
     id: ffi::xcb_window_t,
+    format: ffi::xcb_render_directformat_t,
     parent_id: Cell<ffi::xcb_window_t>,
     winit: Option<WWindow>,
     property_generation: Cell<u32>,
@@ -604,39 +768,13 @@ struct XWindow {
     desired_state: Cell<WindowState>,
     current_state: Cell<WindowState>,
     maximizable: Cell<bool>,
+    icon: RefCell<Option<BackendIcon>>,
 }
 
 impl XWindow {
     fn upgade(&self) {
         self.property_generation
             .set(self.property_generation.get() + 1);
-    }
-
-    fn update_wm_state(&self) {
-        log::info!("Updating WM_STATE of {} to {:?}", self.id, self.current_state.get());
-        unsafe {
-            let state = match self.current_state.get() {
-                WindowState::Withdrawn => 0u32,
-                WindowState::Normal => 1,
-                WindowState::Iconic => 3,
-                _ => unreachable!(),
-            };
-            let instance = &self.el.data.instance.data;
-            let xcb = &instance.backend.xcb;
-            let cookie = xcb.xcb_change_property_checked(
-                instance.c,
-                ffi::XCB_PROP_MODE_REPLACE as _,
-                self.id,
-                instance.atoms.wm_state,
-                instance.atoms.wm_state,
-                32,
-                2,
-                [state, 0].as_ptr() as _,
-            );
-            if let Err(e) = instance.errors.check_cookie(xcb, cookie) {
-                log::warn!("Could not update WM_STATE property: {}", e);
-            }
-        }
     }
 }
 
@@ -678,24 +816,40 @@ impl Window for Arc<XWindow> {
         self
     }
 
+    fn set_inner_size(&self, width: u32, height: u32) {
+        unsafe {
+            let instance = &self.el.data.instance;
+            let xcb = &instance.data.backend.xcb;
+            let cookie = xcb.xcb_configure_window_checked(
+                instance.c.c,
+                self.id,
+                (ffi::XCB_CONFIG_WINDOW_WIDTH | ffi::XCB_CONFIG_WINDOW_HEIGHT) as _,
+                [width, height].as_ptr() as _,
+            );
+            if let Err(e) = instance.c.errors.check_cookie(xcb, cookie) {
+                log::warn!("Could not resize window: {}", e);
+            }
+        }
+    }
+
     fn set_background_color(&self, r: u8, g: u8, b: u8) {
         let color = b as u32 | (g as u32) << 8 | (r as u32) << 16;
-        let instance = &self.el.data.instance.data;
-        let backend = &instance.backend;
+        let instance = &self.el.data.instance;
+        let backend = &instance.data.backend;
         unsafe {
             let cookie = backend.xcb.xcb_change_window_attributes_checked(
-                self.el.data.instance.data.c,
+                self.el.data.instance.c.c,
                 self.id,
                 ffi::XCB_CW_BACK_PIXEL,
                 &color as *const u32 as *const _,
             );
-            if let Err(e) = instance.errors.check_cookie(&backend.xcb, cookie) {
+            if let Err(e) = instance.c.errors.check_cookie(&backend.xcb, cookie) {
                 panic!("Could not change back pixel: {}", e);
             }
             let cookie = backend
                 .xcb
-                .xcb_clear_area(instance.c, 0, self.id, 0, 0, 0, 0);
-            if let Err(e) = instance.errors.check_cookie(&backend.xcb, cookie) {
+                .xcb_clear_area(instance.c.c, 0, self.id, 0, 0, 0, 0);
+            if let Err(e) = instance.c.errors.check_cookie(&backend.xcb, cookie) {
                 panic!("Could not clear window: {}", e);
             }
         }
@@ -708,25 +862,25 @@ impl Window for Arc<XWindow> {
     fn delete(&self) {
         log::info!("Deleting window {}", self.id);
         unsafe {
-            let instance = &self.el.data.instance.data;
-            let xcb = &instance.backend.xcb;
+            let instance = &self.el.data.instance;
+            let xcb = &instance.data.backend.xcb;
             let protocols = self.protocols.get();
             let cookie = if protocols.contains(Protocols::DELETE_WINDOW) {
                 let event = ffi::xcb_client_message_event_t {
                     response_type: ffi::XCB_CLIENT_MESSAGE,
                     format: 32,
                     window: self.id,
-                    type_: instance.atoms.wm_protocols,
+                    type_: instance.data.atoms.wm_protocols,
                     data: ffi::xcb_client_message_data_t {
-                        data32: [instance.atoms.wm_delete_window, 0, 0, 0, 0],
+                        data32: [instance.data.atoms.wm_delete_window, 0, 0, 0, 0],
                     },
                     ..Default::default()
                 };
-                xcb.xcb_send_event_checked(instance.c, 0, self.id, 0, &event as *const _ as _)
+                xcb.xcb_send_event_checked(instance.c.c, 0, self.id, 0, &event as *const _ as _)
             } else {
-                xcb.xcb_destroy_window_checked(instance.c, self.id)
+                xcb.xcb_destroy_window_checked(instance.c.c, self.id)
             };
-            if let Err(e) = instance.errors.check_cookie(xcb, cookie) {
+            if let Err(e) = instance.c.errors.check_cookie(xcb, cookie) {
                 log::warn!("Could not destroy window: {}", e);
             }
         }
@@ -739,6 +893,23 @@ impl Window for Arc<XWindow> {
             self.border.get() + TITLE_HEIGHT as u32,
             self.border.get(),
         )
+    }
+
+    fn set_outer_position(&self, x: i32, y: i32) {
+        log::info!("Setting outer position of {} to {}x{}", self.id, x, y);
+        unsafe {
+            let instance = &self.el.data.instance;
+            let xcb = &instance.data.backend.xcb;
+            let cookie = xcb.xcb_configure_window_checked(
+                instance.c.c,
+                self.parent_id.get(),
+                (ffi::XCB_CONFIG_WINDOW_X | ffi::XCB_CONFIG_WINDOW_Y) as _,
+                [x, y].as_ptr() as _,
+            );
+            if let Err(e) = instance.c.errors.check_cookie(xcb, cookie) {
+                log::warn!("Could not configure window: {}", e);
+            }
+        }
     }
 
     fn ping<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
@@ -765,19 +936,20 @@ impl Window for Arc<XWindow> {
             .pongs
             .remove(&self.id);
         unsafe {
-            let instance = &self.el.data.instance.data;
-            let xcb = &instance.backend.xcb;
+            let instance = &self.el.data.instance;
+            let xcb = &instance.data.backend.xcb;
             let msg = ffi::xcb_client_message_event_t {
                 response_type: ffi::XCB_CLIENT_MESSAGE,
                 format: 32,
                 window: self.id,
-                type_: instance.atoms.wm_protocols,
+                type_: instance.data.atoms.wm_protocols,
                 data: ffi::xcb_client_message_data_t {
-                    data32: [instance.atoms.net_wm_ping, 0, self.id, 0, 0],
+                    data32: [instance.data.atoms.net_wm_ping, 0, self.id, 0, 0],
                 },
                 ..Default::default()
             };
-            xcb.xcb_send_event(instance.c, 0, self.id, 0, &msg as *const _ as _);
+            xcb.xcb_send_event(instance.c.c, 0, self.id, 0, &msg as *const _ as _);
+            xcb.xcb_flush(instance.c.c);
         }
         Box::pin(Changed(&self))
     }
@@ -842,7 +1014,10 @@ impl WindowProperties for Arc<XWindow> {
     }
 
     fn resizable(&self) -> Option<bool> {
-        Some(self.max_size() != Some((self.width(), self.height())) || self.max_size() != self.min_size())
+        Some(
+            self.max_size() != Some((self.width(), self.height()))
+                || self.max_size() != self.min_size(),
+        )
     }
 
     fn attention(&self) -> bool {
@@ -856,17 +1031,26 @@ impl WindowProperties for Arc<XWindow> {
     fn instance(&self) -> Option<String> {
         self.instance.borrow().clone()
     }
+
+    fn supports_transparency(&self) -> bool {
+        self.format.alpha_mask != 0
+    }
+
+    fn icon(&self) -> Option<BackendIcon> {
+        self.icon.borrow().clone()
+    }
 }
 
 impl Drop for XWindow {
     fn drop(&mut self) {
-        let data = &self.el.data.instance.data;
-        data.wm_data.lock().windows.remove(&self.id);
+        let data = &self.el.data.instance;
+        data.data.wm_data.lock().windows.remove(&self.id);
         unsafe {
             if self.parent_id.get() != 0 {
-                data.backend
+                data.data
+                    .backend
                     .xcb
-                    .xcb_destroy_window(data.c, self.parent_id.get());
+                    .xcb_destroy_window(data.c.c, self.parent_id.get());
             }
         }
     }
@@ -874,27 +1058,22 @@ impl Drop for XWindow {
 
 struct XSeat {
     instance: Arc<XInstance>,
-    is_core: bool,
     pointer: ffi::xcb_input_device_id_t,
     keyboard: ffi::xcb_input_device_id_t,
 }
 
 impl Seat for Arc<XSeat> {
     fn add_keyboard(&self) -> Box<dyn Keyboard> {
-        let mut msg = Message {
-            ty: MT_CREATE_KEYBOARD as _,
-        };
-        uapi::write(self.instance.data.sock.raw(), &msg).unwrap();
-        uapi::read(self.instance.data.sock.raw(), &mut msg).unwrap();
-        let id = unsafe {
-            assert_eq!(msg.ty, MT_CREATE_KEYBOARD_REPLY as _);
-            msg.create_keyboard_reply.id
-        };
-        assert!(self.is_core);
+        let id = self.instance.add_keyboard();
+        self.instance.assign_slave(id, self.keyboard);
+        self.instance.set_layout(id, Layout::Qwerty, None);
         Box::new(Arc::new(XKeyboard {
-            seat: self.clone(),
             pressed_keys: Default::default(),
-            id: id as _,
+            layout: Cell::new(Layout::Qwerty),
+            dev: XDevice {
+                seat: self.clone(),
+                id,
+            },
         }))
     }
 
@@ -910,10 +1089,10 @@ impl Seat for Arc<XSeat> {
                 .data
                 .backend
                 .xinput
-                .xcb_input_xi_set_focus_checked(self.instance.data.c, window.id, 0, self.keyboard);
+                .xcb_input_xi_set_focus_checked(self.instance.c.c, window.id, 0, self.keyboard);
             if let Err(e) = self
                 .instance
-                .data
+                .c
                 .errors
                 .check_cookie(&self.instance.data.backend.xcb, cookie)
             {
@@ -923,10 +1102,76 @@ impl Seat for Arc<XSeat> {
     }
 }
 
-struct XKeyboard {
+impl Drop for XSeat {
+    fn drop(&mut self) {
+        if self.keyboard == self.instance.core_kb {
+            return;
+        }
+        unsafe {
+            let instance = &self.instance;
+            let xinput = &instance.data.backend.xinput;
+            let xcb = &instance.data.backend.xcb;
+            #[repr(C)]
+            struct Change {
+                hc: ffi::xcb_input_hierarchy_change_t,
+                data: ffi::xcb_input_hierarchy_change_data_t__remove_master,
+            }
+            let change = Change {
+                hc: ffi::xcb_input_hierarchy_change_t {
+                    type_: ffi::XCB_INPUT_HIERARCHY_CHANGE_TYPE_REMOVE_MASTER as _,
+                    len: (mem::size_of::<Change>() / 4) as _,
+                },
+                data: ffi::xcb_input_hierarchy_change_data_t__remove_master {
+                    deviceid: self.keyboard,
+                    return_mode: ffi::XCB_INPUT_CHANGE_MODE_FLOAT as _,
+                    ..Default::default()
+                },
+            };
+            let cookie = xinput.xcb_input_xi_change_hierarchy_checked(instance.c.c, 1, &change.hc);
+            if let Err(e) = instance.c.errors.check_cookie(xcb, cookie) {
+                log::warn!("Could not remove master: {}", e);
+            }
+        }
+    }
+}
+
+struct XDevice {
     seat: Arc<XSeat>,
-    pressed_keys: Mutex<HashMap<Key, Weak<XPressedKey>>>,
     id: ffi::xcb_input_device_id_t,
+}
+
+impl Drop for XDevice {
+    fn drop(&mut self) {
+        let msg = Message {
+            remove_device: RemoveDevice {
+                ty: MT_REMOVE_DEVICE as _,
+                id: self.id as _,
+            },
+        };
+        uapi::write(self.seat.instance.data.sock.raw(), &msg).unwrap();
+    }
+}
+
+struct XDeviceId {
+    id: ffi::xcb_input_device_id_t,
+}
+
+impl BackendDeviceId for XDeviceId {
+    fn is(&self, device: DeviceId) -> bool {
+        device.xinput_id() == Some(self.id as u32)
+    }
+}
+
+struct XKeyboard {
+    pressed_keys: Mutex<HashMap<Key, Weak<XPressedKey>>>,
+    layout: Cell<Layout>,
+    dev: XDevice,
+}
+
+impl Device for Arc<XKeyboard> {
+    fn id(&self) -> Box<dyn BackendDeviceId> {
+        Box::new(XDeviceId { id: self.dev.id })
+    }
 }
 
 impl Keyboard for Arc<XKeyboard> {
@@ -940,17 +1185,22 @@ impl Keyboard for Arc<XKeyboard> {
         let msg = Message {
             key_press: KeyPress {
                 ty: MT_KEY_PRESS as _,
-                id: self.id as _,
+                id: self.dev.id as _,
                 key: evdev::map_key(key),
             },
         };
-        uapi::write(self.seat.instance.data.sock.raw(), &msg).unwrap();
+        uapi::write(self.dev.seat.instance.data.sock.raw(), &msg).unwrap();
         let p = Arc::new(XPressedKey {
             kb: self.clone(),
             key,
         });
         keys.insert(key, Arc::downgrade(&p));
         Box::new(p)
+    }
+
+    fn set_layout(&self, layout: Layout) {
+        self.dev.seat.instance.set_layout(self.dev.id, layout, Some(self.layout.get()));
+        self.layout.set(layout);
     }
 }
 
@@ -966,11 +1216,11 @@ impl Drop for XPressedKey {
         let msg = Message {
             key_press: KeyPress {
                 ty: MT_KEY_RELEASE as _,
-                id: self.kb.id as _,
+                id: self.kb.dev.id as _,
                 key: evdev::map_key(self.key),
             },
         };
-        uapi::write(self.kb.seat.instance.data.sock.raw(), &msg).unwrap();
+        uapi::write(self.kb.dev.seat.instance.data.sock.raw(), &msg).unwrap();
     }
 }
 
@@ -999,6 +1249,7 @@ enum MessageType {
     MT_CREATE_KEYBOARD_REPLY,
     MT_KEY_PRESS,
     MT_KEY_RELEASE,
+    MT_REMOVE_DEVICE,
 }
 
 #[repr(C)]
@@ -1007,6 +1258,7 @@ union Message {
     ty: u32,
     create_keyboard_reply: CreateKeyboardReply,
     key_press: KeyPress,
+    remove_device: RemoveDevice,
 }
 
 unsafe impl Pod for Message {}
@@ -1026,12 +1278,20 @@ struct KeyPress {
     key: u32,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct RemoveDevice {
+    ty: u32,
+    id: u32,
+}
+
 #[derive(Default)]
 struct Atoms {
     net_wm_state: ffi::xcb_atom_t,
     wm_change_state: ffi::xcb_atom_t,
     wm_state: ffi::xcb_atom_t,
     net_wm_name: ffi::xcb_atom_t,
+    net_wm_icon: ffi::xcb_atom_t,
     wm_delete_window: ffi::xcb_atom_t,
     net_wm_ping: ffi::xcb_atom_t,
     utf8_string: ffi::xcb_atom_t,

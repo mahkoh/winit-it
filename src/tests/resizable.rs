@@ -1,5 +1,5 @@
-use winit::window::WindowBuilder;
 use crate::backend::{BackendFlags, Instance};
+use winit::window::WindowBuilder;
 
 test!(run, BackendFlags::WINIT_SET_RESIZABLE);
 

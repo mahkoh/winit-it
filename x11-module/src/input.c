@@ -99,6 +99,7 @@ static uint32_t input_new(const char *prefix) {
   asprintf(&name, "%s%u", prefix, id);
   options = input_option_new(options, "driver", strdup(DRIVER_NAME));
   options = input_option_new(options, "name", name);
+  options = input_option_new(options, "floating", strdup("1"));
   DeviceIntPtr dev;
   assert(!NewInputDeviceRequest(options, NULL, &dev));
   input_option_free_list(&options);
@@ -138,4 +139,9 @@ void input_key_press(uint32_t keyboard, uint8_t key) {
 void input_key_release(uint32_t keyboard, uint8_t key) {
   Device *device = get_keyboard(keyboard);
   xf86PostKeyboardEvent(device->device->dev, key + MIN_KEYCODE, 0);
+}
+
+void input_remove_device(uint32_t id) {
+  Device *device = get_device(id);
+  DeleteInputDeviceRequest(device->device->dev);
 }

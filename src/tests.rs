@@ -29,6 +29,8 @@ mod always_on_top;
 mod class;
 mod decorations;
 mod delete_window;
+mod device_added;
+mod icon;
 mod maximize;
 mod minimize;
 mod physical_inner_size;
@@ -36,11 +38,14 @@ mod physical_outer_position;
 mod physical_size_bounds;
 #[cfg(target_os = "linux")]
 mod ping;
+mod resizable;
+mod set_position;
+mod set_size;
 mod title;
+mod transparency;
 mod urgency;
 mod visible;
 mod window_keyboard;
-mod resizable;
 
 use crate::backend::{BackendFlags, Instance};
 use std::future::Future;
@@ -75,5 +80,10 @@ pub fn tests() -> Vec<Box<dyn Test>> {
         Box::new(ping::Test),
         Box::new(minimize::Test),
         Box::new(resizable::Test),
+        Box::new(transparency::Test),
+        Box::new(icon::Test),
+        Box::new(set_position::Test),
+        Box::new(set_size::Test),
+        Box::new(device_added::Test),
     ]
 }

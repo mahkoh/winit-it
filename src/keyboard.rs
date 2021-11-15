@@ -107,3 +107,10 @@ pub enum Key {
     KeyY,
     KeyZ,
 }
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Layout {
+    Qwerty,
+    Azerty,
+    QwertySwapped,
+}

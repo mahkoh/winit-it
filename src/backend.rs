@@ -7,7 +7,7 @@ use std::fmt::Display;
 use std::future::Future;
 use std::pin::Pin;
 use winit::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
-use winit::event::DeviceId;
+use winit::event::{DeviceId, RawKeyEvent};
 use winit::keyboard::ModifiersState;
 use winit::window::{Icon, UserAttentionType, Window as WWindow, WindowBuilder, WindowId};
 
@@ -87,6 +87,17 @@ impl dyn EventLoop {
             let de = self.device_event().await;
             if de.event == DeviceEvent::Removed {
                 return de;
+            }
+        }
+    }
+
+    pub async fn device_key_event(&self) -> (DeviceEventExt, RawKeyEvent) {
+        log::info!("Waiting for device key event");
+        loop {
+            let de = self.device_event().await;
+            if let DeviceEvent::Key(e) = de.event {
+                log::debug!("Got key event {:?}", e);
+                return (de, e);
             }
         }
     }
@@ -523,6 +534,7 @@ pub trait Seat {
     fn add_keyboard(&self) -> Box<dyn Keyboard>;
     fn add_mouse(&self) -> Box<dyn Mouse>;
     fn focus(&self, window: &dyn Window);
+    fn set_layout(&self, layout: Layout);
 }
 
 pub trait BackendDeviceId {
@@ -535,7 +547,6 @@ pub trait Device {
 
 pub trait Keyboard: Device {
     fn press(&self, key: Key) -> Box<dyn PressedKey>;
-    fn set_layout(&self, layout: Layout);
 }
 
 pub trait Mouse: Device {}

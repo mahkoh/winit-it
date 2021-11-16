@@ -30,6 +30,7 @@ mod class;
 mod decorations;
 mod delete_window;
 mod device_added;
+mod device_key;
 mod icon;
 mod maximize;
 mod minimize;
@@ -85,5 +86,6 @@ pub fn tests() -> Vec<Box<dyn Test>> {
         Box::new(set_position::Test),
         Box::new(set_size::Test),
         Box::new(device_added::Test),
+        Box::new(device_key::Test),
     ]
 }

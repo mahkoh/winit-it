@@ -1,5 +1,6 @@
 use crate::backend::Instance;
-use crate::keyboard::Key::{KeyL, KeyLeftshift, KeyRightalt, KeyRightctrl};
+use crate::keyboard::Key::{KeyL, KeyLeftshift, KeyQ, KeyRightalt, KeyRightctrl};
+use crate::keyboard::Layout;
 use winit::event::ElementState;
 use winit::keyboard::{Key as WKey, KeyCode, KeyLocation, ModifiersState};
 
@@ -467,6 +468,43 @@ async fn run(instance: &dyn Instance) {
                 } else {
                     assert_eq!(ki.event.state, ElementState::Released);
                 }
+            }
+        }
+    }
+
+    log::info!("Switching to Azerty layout.");
+    seat.set_layout(Layout::Azerty);
+
+    {
+        log::info!("Testing Q");
+        // Q Press
+        // Q Release
+        {
+            kb.press(KeyQ);
+        }
+        // 0: Q pressed
+        // 1: Q released
+        for i in 0..2 {
+            let (_, ki) = el.window_keyboard_input().await;
+            assert_eq!(ki.event.physical_key, KeyCode::KeyQ);
+            assert_eq!(ki.event.logical_key, WKey::Character("a"));
+            assert_eq!(ki.event.text, Some("a"));
+            assert_eq!(ki.event.location, KeyLocation::Standard);
+            #[cfg(have_mod_supplement)]
+            {
+                assert_eq!(
+                    ki.event.mod_supplement.key_without_modifiers,
+                    WKey::Character("a")
+                );
+                assert_eq!(
+                    ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                    Some("a")
+                );
+            }
+            if i == 0 {
+                assert_eq!(ki.event.state, ElementState::Pressed);
+            } else {
+                assert_eq!(ki.event.state, ElementState::Released);
             }
         }
     }

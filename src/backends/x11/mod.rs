@@ -2,6 +2,7 @@ use crate::backend::{
     Backend, BackendDeviceId, BackendFlags, BackendIcon, Device, EventLoop, Instance, Keyboard,
     Mouse, PressedKey, Seat, Window, WindowProperties,
 };
+use crate::backends::x11::layout::{layouts, set_names, Layouts};
 use crate::backends::x11::wm::TITLE_HEIGHT;
 use crate::backends::x11::MessageType::MT_REMOVE_DEVICE;
 use crate::event::{map_event, Event, UserEvent};
@@ -32,7 +33,6 @@ use winit::window::{Window as WWindow, WindowBuilder};
 use xcb_dl::{ffi, Xcb, XcbRender, XcbXinput, XcbXkb};
 use xcb_dl_util::error::XcbErrorParser;
 use MessageType::{MT_CREATE_KEYBOARD, MT_CREATE_KEYBOARD_REPLY, MT_KEY_PRESS, MT_KEY_RELEASE};
-use crate::backends::x11::layout::{Layouts, layouts};
 
 mod evdev;
 mod keysyms;
@@ -42,6 +42,7 @@ mod wm;
 static ENV_LOCK: Mutex<()> = parking_lot::const_mutex(());
 
 const DEFAULT_X_PATH: &str = "/usr/lib/Xorg";
+// const DEFAULT_X_PATH: &str = "/home/julian/c/xserver/install/bin/X";
 
 pub fn backend() -> Box<dyn Backend> {
     let x_path = match std::env::var("X_PATH") {
@@ -197,7 +198,11 @@ impl Backend for Arc<XBackend> {
 
         let (core_p, core_kb) = unsafe {
             let mut err = ptr::null_mut();
-            let reply = self.xkb.xcb_xkb_use_extension_reply(c.c, self.xkb.xcb_xkb_use_extension(c.c, 1, 0), &mut err);
+            let reply = self.xkb.xcb_xkb_use_extension_reply(
+                c.c,
+                self.xkb.xcb_xkb_use_extension(c.c, 1, 0),
+                &mut err,
+            );
             c.errors.check(&self.xcb, reply, err).unwrap();
             let cookie = self.xinput.xcb_input_xi_query_version(c.c, 2, 0);
             let reply = self
@@ -232,6 +237,7 @@ impl Backend for Arc<XBackend> {
             wm,
             core_p,
             core_kb,
+            core_layout: Arc::new(Cell::new(Layout::Qwerty)),
         }))
     }
 
@@ -334,6 +340,7 @@ struct XInstance {
     wm: Option<JoinHandle<()>>,
     core_p: ffi::xcb_input_device_id_t,
     core_kb: ffi::xcb_input_device_id_t,
+    core_layout: Arc<Cell<Layout>>,
 }
 
 unsafe impl Send for XInstance {}
@@ -378,21 +385,26 @@ impl XInstance {
         }
     }
 
-    fn set_layout(&self, slave: ffi::xcb_input_device_id_t, layout: Layout, prev_layout: Option<Layout>) {
+    fn set_layout(
+        &self,
+        slave: ffi::xcb_input_device_id_t,
+        layout: Layout,
+        prev_layout: Option<Layout>,
+    ) {
         if Some(layout) == prev_layout {
             return;
         }
         let change_map = match (layout, prev_layout) {
             (_, None) => true,
             (Layout::QwertySwapped, _) => true,
-            (Layout::Qwerty | Layout::Azerty, Some(Layout::QwertySwapped)) => true,
+            (_, Some(Layout::QwertySwapped)) => true,
             _ => false,
         };
         let backend = &self.data.backend;
         let (group, msg) = match layout {
-            Layout::Qwerty => (1, &backend.layouts.msg1),
-            Layout::Azerty => (2, &backend.layouts.msg1),
-            Layout::QwertySwapped => (1, &backend.layouts.msg2),
+            Layout::Qwerty => (0, &backend.layouts.msg1),
+            Layout::Azerty => (1, &backend.layouts.msg1),
+            Layout::QwertySwapped => (0, &backend.layouts.msg2),
         };
         unsafe {
             let xcb = &self.data.backend.xcb;
@@ -401,10 +413,22 @@ impl XInstance {
                 let mut header = msg.header;
                 header.device_spec = slave;
                 let mut iovecs = [
-                    libc::iovec { iov_base: ptr::null_mut(), iov_len: 0 },
-                    libc::iovec { iov_base: ptr::null_mut(), iov_len: 0 },
-                    libc::iovec { iov_base: &mut header as *mut _ as _, iov_len: mem::size_of_val(&header) },
-                    libc::iovec { iov_base: msg.body.as_ptr() as _, iov_len: msg.body.len() },
+                    libc::iovec {
+                        iov_base: ptr::null_mut(),
+                        iov_len: 0,
+                    },
+                    libc::iovec {
+                        iov_base: ptr::null_mut(),
+                        iov_len: 0,
+                    },
+                    libc::iovec {
+                        iov_base: &mut header as *mut _ as _,
+                        iov_len: mem::size_of_val(&header),
+                    },
+                    libc::iovec {
+                        iov_base: msg.body.as_ptr() as _,
+                        iov_len: msg.body.len(),
+                    },
                 ];
                 let request = ffi::xcb_protocol_request_t {
                     count: 2,
@@ -412,16 +436,25 @@ impl XInstance {
                     opcode: ffi::XCB_XKB_SET_MAP,
                     isvoid: 1,
                 };
-                let sequence = xcb.xcb_send_request(self.c.c, ffi::XCB_REQUEST_CHECKED, &mut iovecs[2], &request);
+                let sequence = xcb.xcb_send_request(
+                    self.c.c,
+                    ffi::XCB_REQUEST_CHECKED,
+                    &mut iovecs[2],
+                    &request,
+                );
                 let cookie = ffi::xcb_void_cookie_t { sequence };
                 if let Err(e) = self.c.errors.check_cookie(xcb, cookie) {
                     panic!("Could not set keymap: {}", e);
                 }
-                let cookie = xkb.xcb_xkb_latch_lock_state_checked(self.c.c, slave, 0, 0, 1, group, 0, 0, 0);
+                let cookie = set_names(xkb, &self.c, slave);
                 if let Err(e) = self.c.errors.check_cookie(xcb, cookie) {
-                    panic!("Could not set keymap group: {}", e);
+                    panic!("Could not set level names: {}", e);
                 }
-                std::thread::sleep_ms(1000000000);
+            }
+            let cookie =
+                xkb.xcb_xkb_latch_lock_state_checked(self.c.c, slave, 0, 0, 1, group, 0, 0, 0);
+            if let Err(e) = self.c.errors.check_cookie(xcb, cookie) {
+                panic!("Could not set keymap group: {}", e);
             }
         }
     }
@@ -437,6 +470,7 @@ impl Instance for Arc<XInstance> {
             instance: self.clone(),
             pointer: self.core_p,
             keyboard: self.core_kb,
+            layout: self.core_layout.clone(),
         }))
     }
 
@@ -1060,16 +1094,16 @@ struct XSeat {
     instance: Arc<XInstance>,
     pointer: ffi::xcb_input_device_id_t,
     keyboard: ffi::xcb_input_device_id_t,
+    layout: Arc<Cell<Layout>>,
 }
 
 impl Seat for Arc<XSeat> {
     fn add_keyboard(&self) -> Box<dyn Keyboard> {
         let id = self.instance.add_keyboard();
         self.instance.assign_slave(id, self.keyboard);
-        self.instance.set_layout(id, Layout::Qwerty, None);
+        self.instance.set_layout(id, self.layout.get(), None);
         Box::new(Arc::new(XKeyboard {
             pressed_keys: Default::default(),
-            layout: Cell::new(Layout::Qwerty),
             dev: XDevice {
                 seat: self.clone(),
                 id,
@@ -1099,6 +1133,12 @@ impl Seat for Arc<XSeat> {
                 panic!("Could not set focus: {}", e);
             }
         }
+    }
+
+    fn set_layout(&self, layout: Layout) {
+        self.instance
+            .set_layout(self.keyboard, layout, Some(self.layout.get()));
+        self.layout.set(layout);
     }
 }
 
@@ -1164,7 +1204,6 @@ impl BackendDeviceId for XDeviceId {
 
 struct XKeyboard {
     pressed_keys: Mutex<HashMap<Key, Weak<XPressedKey>>>,
-    layout: Cell<Layout>,
     dev: XDevice,
 }
 
@@ -1196,11 +1235,6 @@ impl Keyboard for Arc<XKeyboard> {
         });
         keys.insert(key, Arc::downgrade(&p));
         Box::new(p)
-    }
-
-    fn set_layout(&self, layout: Layout) {
-        self.dev.seat.instance.set_layout(self.dev.id, layout, Some(self.layout.get()));
-        self.layout.set(layout);
     }
 }
 

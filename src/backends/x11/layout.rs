@@ -2,11 +2,12 @@
 
 use super::evdev::*;
 use super::keysyms::*;
+use crate::backends::x11::XConnection;
 use crate::keyboard::Layout::{self, *};
 use std::collections::HashMap;
 use std::mem::MaybeUninit;
 use uapi::as_maybe_uninit_bytes;
-use xcb_dl::ffi;
+use xcb_dl::{ffi, XcbXkb};
 
 pub struct Layouts {
     pub msg1: Msg,
@@ -38,6 +39,42 @@ const FOUR_LEVEL: u8 = 4;
 const FOUR_LEVEL_SEMIALPHABETIC: u8 = 5;
 
 const NUM_TYPES: u8 = FOUR_LEVEL_SEMIALPHABETIC - ONE_LEVEL + 1;
+const NUM_LEVELS: usize = 15;
+
+pub(super) fn set_names(
+    xkb: &XcbXkb,
+    c: &XConnection,
+    slave: ffi::xcb_input_device_id_t,
+) -> ffi::xcb_void_cookie_t {
+    let mut levels_per_type: [u8; NUM_TYPES as usize] = [1, 2, 2, 2, 4, 4];
+    let mut level_names: [u32; NUM_LEVELS] = [0; NUM_LEVELS];
+    assert_eq!(levels_per_type.into_iter().sum::<u8>(), NUM_LEVELS as u8);
+    let values = ffi::xcb_xkb_set_names_values_t {
+        n_levels_per_type: levels_per_type.as_mut_ptr(),
+        kt_level_names: level_names.as_mut_ptr(),
+        ..Default::default()
+    };
+    unsafe {
+        xkb.xcb_xkb_set_names_aux_checked(
+            c.c,
+            slave,
+            0,
+            ffi::XCB_XKB_NAME_DETAIL_KT_LEVEL_NAMES,
+            0,
+            NUM_TYPES,
+            0,
+            NUM_TYPES,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            NUM_LEVELS as _,
+            &values,
+        )
+    }
+}
 
 fn classify_keysyms(keysyms: &[u32]) -> u8 {
     if keysyms.len() < 2 {
@@ -256,7 +293,7 @@ fn create_msg(layouts: &[HashMap<u32, Vec<u32>>]) -> Msg {
     let mut total_actions = 0;
     for key in FIRST_KEY..=LAST_KEY {
         let syms = syms_by_key.get_mut(&key).unwrap();
-        for s in &syms.syms {
+        'outer: for s in &syms.syms {
             for &sym in *s {
                 if matches!(
                     sym,
@@ -271,11 +308,8 @@ fn create_msg(layouts: &[HashMap<u32, Vec<u32>>]) -> Msg {
                         | XK_Control_R
                 ) {
                     syms.has_actions = true;
-                    break;
+                    break 'outer;
                 }
-            }
-            if syms.has_actions {
-                break;
             }
         }
         let num_actions = syms.has_actions as usize * syms.syms.len() * syms.width;

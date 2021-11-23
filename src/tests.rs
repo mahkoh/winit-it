@@ -29,6 +29,7 @@ mod always_on_top;
 mod class;
 mod decorations;
 mod delete_window;
+mod destroyed;
 mod device_added;
 mod device_key;
 mod icon;
@@ -39,6 +40,7 @@ mod physical_outer_position;
 mod physical_size_bounds;
 #[cfg(target_os = "linux")]
 mod ping;
+mod reset_dead_keys;
 mod resizable;
 mod set_position;
 mod set_size;
@@ -47,7 +49,8 @@ mod transparency;
 mod urgency;
 mod visible;
 mod window_keyboard;
-mod reset_dead_keys;
+mod focused;
+mod focused_multi_seat;
 
 use crate::backend::{BackendFlags, Instance};
 use std::future::Future;
@@ -89,5 +92,8 @@ pub fn tests() -> Vec<Box<dyn Test>> {
         Box::new(device_added::Test),
         Box::new(device_key::Test),
         Box::new(reset_dead_keys::Test),
+        Box::new(destroyed::Test),
+        Box::new(focused::Test),
+        Box::new(focused_multi_seat::Test),
     ]
 }

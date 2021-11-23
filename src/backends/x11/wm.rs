@@ -870,6 +870,7 @@ impl Wm {
             }
             data.parents
                 .insert(win.parent_id.get(), Arc::downgrade(&win));
+            data.window_to_parent.insert(win.id, win.parent_id.get());
             drop(data);
             self.handle_wm_name(event.window);
             self.handle_net_wm_name(event.window);
@@ -941,6 +942,16 @@ impl Wm {
             win.destroyed.set(true);
             win.upgade();
             data.changed();
+        }
+        if let Some(parent) = data.window_to_parent.remove(&event.window) {
+            data.parents.remove(&parent);
+            unsafe {
+                let xcb = &self.instance.backend.xcb;
+                let cookie = xcb.xcb_destroy_window_checked(self.c.c, parent);
+                if let Err(e) = self.c.errors.check_cookie(xcb, cookie) {
+                    log::warn!("Could not destroy parent: {}", e);
+                }
+            }
         }
         drop(data);
         self.update_client_list();

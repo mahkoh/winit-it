@@ -1,9 +1,11 @@
+use crate::backend::Instance;
 use crate::tlog::LogState;
 use parking_lot::Mutex;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::ptr;
+use std::rc::Rc;
 use std::sync::atomic::AtomicUsize;
 
 pub struct TestData {
@@ -11,6 +13,7 @@ pub struct TestData {
     pub next_image_id: AtomicUsize,
     pub log_state: Mutex<LogState>,
     pub error: Cell<bool>,
+    pub instance: RefCell<Option<Rc<Box<dyn Instance>>>>,
 }
 
 thread_local! {

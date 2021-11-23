@@ -32,6 +32,7 @@ bitflags::bitflags! {
         const SET_INNER_SIZE = 1 << 16;
         const DEVICE_ADDED = 1 << 17;
         const DEVICE_REMOVED = 1 << 18;
+        const CREATE_SEAT = 1 << 19;
     }
 }
 
@@ -46,6 +47,10 @@ pub trait Instance {
     fn default_seat(&self) -> Box<dyn Seat>;
     fn create_event_loop(&self) -> Box<dyn EventLoop>;
     fn take_screenshot(&self);
+    fn before_poll(&self);
+    fn create_seat(&self) -> Box<dyn Seat> {
+        unimplemented!();
+    }
 }
 
 pub trait EventLoop {
@@ -99,6 +104,28 @@ impl dyn EventLoop {
                 log::debug!("Got key event {:?}", e);
                 return (de, e);
             }
+        }
+    }
+
+    pub async fn window_destroyed_event(&self) -> WindowEventExt {
+        log::debug!("Awaiting window destroyed");
+        loop {
+            let we = self.window_event().await;
+            if let WindowEvent::Destroyed = &we.event {
+                log::debug!("Got window destroyed");
+                return we.clone();
+            };
+        }
+    }
+
+    pub async fn window_focus_event(&self) -> (WindowEventExt, bool) {
+        log::debug!("Awaiting window focus");
+        loop {
+            let we = self.window_event().await;
+            if let WindowEvent::Focused(v) = &we.event {
+                log::debug!("Got window focus {}", v);
+                return (we.clone(), *v);
+            };
         }
     }
 
@@ -540,6 +567,7 @@ pub trait Seat {
     fn add_keyboard(&self) -> Box<dyn Keyboard>;
     fn add_mouse(&self) -> Box<dyn Mouse>;
     fn focus(&self, window: &dyn Window);
+    fn un_focus(&self);
     fn set_layout(&self, layout: Layout);
 }
 

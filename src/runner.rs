@@ -4,10 +4,11 @@ use crate::tests::Test;
 use crate::tlog::LogState;
 use parking_lot::Mutex;
 use rayon::prelude::*;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fs::OpenOptions;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
@@ -86,22 +87,30 @@ fn run_test(exec: &BackendExecution, backend: &dyn Backend, test: &dyn Test) -> 
         test_dir,
         next_image_id: Default::default(),
         error: Cell::new(false),
+        instance: RefCell::new(None),
     };
     crate::test::set_test_data_and_run(&td, || {
         let rt = tokio::runtime::Builder::new_current_thread()
+            .on_thread_park(|| {
+                crate::test::with_test_data(|td| {
+                    td.instance.borrow().as_ref().unwrap().before_poll();
+                })
+            })
             .enable_all()
             .build()
             .unwrap();
         rt.block_on(async {
             let ls = LocalSet::new();
             ls.run_until(async {
-                let instance = backend.instantiate();
-                if tokio::time::timeout(Duration::from_secs(5), test.run(&*instance))
+                let instance = Rc::new(backend.instantiate());
+                *td.instance.borrow_mut() = Some(instance.clone());
+                if tokio::time::timeout(Duration::from_secs(5), test.run(&**instance))
                     .await
                     .is_err()
                 {
                     log::error!("Test timed out");
                 }
+                *td.instance.borrow_mut() = None;
             })
             .await;
             ls.await;

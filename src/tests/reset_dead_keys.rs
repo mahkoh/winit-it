@@ -1,9 +1,8 @@
-use std::time::Duration;
 use crate::backend::Instance;
-use crate::keyboard::Key::{KeyEsc, KeyL, KeyLeftbrace, KeyLeftctrl, KeyLeftshift, KeyQ, KeyRightalt, KeyRightctrl, KeyRightshift};
+use crate::keyboard::Key::{KeyLeftbrace, KeyQ};
 use crate::keyboard::Layout;
 use winit::event::ElementState;
-use winit::keyboard::{Key as WKey, KeyCode, KeyLocation, ModifiersState};
+use winit::keyboard::{Key as WKey, KeyCode, KeyLocation};
 
 test!(run);
 
@@ -100,16 +99,16 @@ async fn run(instance: &dyn Instance) {
             assert_eq!(ki.event.text, None);
             assert_eq!(ki.event.location, KeyLocation::Standard);
             #[cfg(have_mod_supplement)]
-                {
-                    assert_eq!(
-                        ki.event.mod_supplement.key_without_modifiers,
-                        WKey::Dead(Some('^'))
-                    );
-                    assert_eq!(
-                        ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
-                        None
-                    );
-                }
+            {
+                assert_eq!(
+                    ki.event.mod_supplement.key_without_modifiers,
+                    WKey::Dead(Some('^'))
+                );
+                assert_eq!(
+                    ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                    None
+                );
+            }
             if i == 0 {
                 assert_eq!(ki.event.state, ElementState::Pressed);
             } else {
@@ -135,23 +134,23 @@ async fn run(instance: &dyn Instance) {
             }
             assert_eq!(ki.event.location, KeyLocation::Standard);
             #[cfg(have_mod_supplement)]
-                {
+            {
+                assert_eq!(
+                    ki.event.mod_supplement.key_without_modifiers,
+                    WKey::Character("a")
+                );
+                if i == 0 {
                     assert_eq!(
-                        ki.event.mod_supplement.key_without_modifiers,
-                        WKey::Character("a")
+                        ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                        Some("a")
                     );
-                    if i == 0 {
-                        assert_eq!(
-                            ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
-                            Some("a")
-                        );
-                    } else {
-                        assert_eq!(
-                            ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
-                            None
-                        );
-                    }
+                } else {
+                    assert_eq!(
+                        ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                        None
+                    );
                 }
+            }
             if matches!(i, 0) {
                 assert_eq!(ki.event.state, ElementState::Pressed);
             } else {

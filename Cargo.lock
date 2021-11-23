@@ -750,6 +750,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mio"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba272f85fa0b41fc91872be579b3bbe0f56b792aa361a380eb669469f68dafb2"
+dependencies = [
+ "libc",
+ "log",
+ "miow",
+ "ntapi",
+ "winapi",
+]
+
+[[package]]
 name = "mio-misc"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -758,7 +771,7 @@ dependencies = [
  "crossbeam",
  "crossbeam-queue",
  "log",
- "mio",
+ "mio 0.7.14",
 ]
 
 [[package]]
@@ -1328,7 +1341,7 @@ checksum = "588b2d10a336da58d877567cd8fb8a14b463e2104910f8132cd054b4b96e29ee"
 dependencies = [
  "autocfg",
  "libc",
- "mio",
+ "mio 0.7.14",
  "pin-project-lite",
  "tokio-macros",
  "winapi",
@@ -1541,7 +1554,7 @@ dependencies = [
  "libc",
  "log",
  "memmap2 0.2.3",
- "mio",
+ "mio 0.7.14",
  "mio-misc",
  "nameof",
  "ndk",
@@ -1575,6 +1588,7 @@ dependencies = [
  "futures",
  "libc",
  "log",
+ "mio 0.8.0",
  "parking_lot",
  "rayon",
  "simple_logger",

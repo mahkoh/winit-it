@@ -15,20 +15,19 @@ use std::fmt::Display;
 use std::future::Future;
 use std::pin::Pin;
 use std::process::Command;
+use std::io::Write;
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Waker};
 use std::{mem, ptr};
-use tokio::io::unix::AsyncFd;
 use tokio::io::Interest;
+use tokio::io::unix::AsyncFd;
 use tokio::task::JoinHandle;
 use uapi::c::{AF_UNIX, O_CLOEXEC, SOCK_CLOEXEC, SOCK_SEQPACKET};
 use uapi::{pipe2, socketpair, IntoUstr, OwnedFd, Pod, UapiReadExt, UstrPtr};
 use winit::event::DeviceId;
 use winit::event_loop::{ControlFlow, EventLoop as WEventLoop};
 use winit::platform::run_return::EventLoopExtRunReturn;
-use winit::platform::unix::{
-    DeviceIdExtUnix, EventLoopExtUnix, EventLoopWindowTargetExtUnix, WindowExtUnix,
-};
+use winit::platform::unix::{DeviceIdExtUnix, EventLoopExtUnix, EventLoopWindowTargetExtUnix, WindowExtUnix};
 use winit::window::{Window as WWindow, WindowBuilder};
 use xcb_dl::{ffi, Xcb, XcbRender, XcbXinput, XcbXkb};
 use xcb_dl_util::error::XcbErrorParser;
@@ -160,6 +159,7 @@ impl Backend for Arc<XBackend> {
                 wakers: vec![],
                 windows: Default::default(),
                 parents: Default::default(),
+                window_to_parent: Default::default(),
                 pongs: Default::default(),
             }),
             atoms: Default::default(),
@@ -231,13 +231,21 @@ impl Backend for Arc<XBackend> {
             core.unwrap()
         };
 
+        let root = unsafe {
+            let screen = *self.xcb.xcb_setup_roots_iterator(self.xcb.xcb_get_setup(c.c)).data;
+            screen.root
+        };
+
         Box::new(Arc::new(XInstance {
             c,
             data: instance.clone(),
+            event_loops: Default::default(),
+            root,
             wm,
             core_p,
             core_kb,
             core_layout: Arc::new(Cell::new(Layout::Qwerty)),
+            next_seat_id: Cell::new(1),
         }))
     }
 
@@ -265,6 +273,7 @@ impl Backend for Arc<XBackend> {
             | BackendFlags::SET_INNER_SIZE
             | BackendFlags::DEVICE_ADDED
             | BackendFlags::DEVICE_REMOVED
+            | BackendFlags::CREATE_SEAT
     }
 }
 
@@ -337,10 +346,13 @@ struct XInstanceData {
 struct XInstance {
     c: XConnection,
     data: Arc<XInstanceData>,
+    event_loops: Mutex<Vec<Weak<XEventLoopData>>>,
+    root: ffi::xcb_window_t,
     wm: Option<JoinHandle<()>>,
     core_p: ffi::xcb_input_device_id_t,
     core_kb: ffi::xcb_input_device_id_t,
     core_layout: Arc<Cell<Layout>>,
+    next_seat_id: Cell<usize>,
 }
 
 unsafe impl Send for XInstance {}
@@ -474,6 +486,72 @@ impl Instance for Arc<XInstance> {
         }))
     }
 
+    fn create_seat(&self) -> Box<dyn Seat> {
+        unsafe {
+            let xinput = &self.data.backend.xinput;
+            let xcb = &self.data.backend.xcb;
+            let name = format!("seat{}", self.next_seat_id.get());
+            let kb_name = format!("{} keyboard", name);
+            self.next_seat_id.set(self.next_seat_id.get() + 1);
+            #[repr(C)]
+            #[derive(Debug)]
+            struct Change {
+                hc: ffi::xcb_input_add_master_t,
+                name: [u8; 16],
+            }
+            let mut change = Change {
+                hc: ffi::xcb_input_add_master_t {
+                    type_: ffi::XCB_INPUT_HIERARCHY_CHANGE_TYPE_ADD_MASTER as _,
+                    len: (mem::size_of::<Change>() / 4) as _,
+                    name_len: 16,
+                    send_core: 0,
+                    enable: 1,
+                },
+                name: [0; 16],
+            };
+            write!(&mut change.name[..], "{}", name).unwrap();
+            log::info!("{:?}", change);
+            let cookie = xinput.xcb_input_xi_change_hierarchy_checked(self.c.c, 1, &change as *const _ as _);
+            if let Err(e) = self.c.errors.check_cookie(xcb, cookie) {
+                panic!("Could not add master: {}", e);
+            }
+            let mut err = ptr::null_mut();
+            let reply = xinput.xcb_input_xi_query_device_reply(
+                self.c.c,
+                xinput.xcb_input_xi_query_device(self.c.c, ffi::XCB_INPUT_DEVICE_ALL_MASTER as _),
+                &mut err,
+            );
+            let reply = match self.c.errors.check(xcb, reply, err) {
+                Ok(r) => r,
+                Err(e) => panic!("Could not query input devices: {}", e),
+            };
+            let mut infos = xinput.xcb_input_xi_query_device_infos_iterator(&*reply);
+            let (kb_id, pointer_id) = loop {
+                if infos.rem == 0 {
+                    panic!("Newly created seat does not exist");
+                }
+                let info = &*infos.data;
+                if info.type_ == ffi::XCB_INPUT_DEVICE_TYPE_MASTER_KEYBOARD as _ {
+                    let name = std::slice::from_raw_parts(
+                        xinput.xcb_input_xi_device_info_name(infos.data) as *const u8,
+                        info.name_len as _,
+                    );
+                    if name == kb_name.as_bytes() {
+                        break (info.deviceid, info.attachment);
+                    }
+                }
+                xinput.xcb_input_xi_device_info_next(&mut infos);
+            };
+            self.set_layout(kb_id, Layout::Qwerty, None);
+            Box::new(Arc::new(XSeat {
+                instance: self.clone(),
+                pointer: pointer_id,
+                keyboard: kb_id,
+                layout: Arc::new(Cell::new(Layout::Qwerty)),
+            }))
+        }
+    }
+
     fn create_event_loop(&self) -> Box<dyn EventLoop> {
         let _lock = ENV_LOCK.lock();
         std::env::set_var("DISPLAY", format!(":{}", self.data.display));
@@ -491,26 +569,11 @@ impl Instance for Arc<XInstance> {
         let jh = tokio::task::spawn_local(async move {
             let afd = AsyncFd::with_interest(el_fd, Interest::READABLE).unwrap();
             loop {
-                {
-                    let mut el = el2.el.lock();
-                    let mut events = el2.events.lock();
-                    el.run_return(|ev, _, cf| {
-                        *cf = ControlFlow::Exit;
-                        if let Some(ev) = map_event(ev) {
-                            log::debug!("winit event: {:?}", ev);
-                            events.push_back(ev);
-                        }
-                    });
-                    log::info!("Winit event loop ran");
-                    el2.version.set(el2.version.get() + 1);
-                    let mut waiters = el2.waiters.lock();
-                    for waiter in waiters.drain(..) {
-                        waiter.wake();
-                    }
-                }
+                el2.run();
                 afd.readable().await.unwrap().clear_ready();
             }
         });
+        self.event_loops.lock().push(Arc::downgrade(&el));
         Box::new(Arc::new(XEventLoop {
             data: el,
             jh: Some(jh),
@@ -559,12 +622,22 @@ impl Instance for Arc<XInstance> {
             crate::screenshot::log_image(data, attr.width as _, attr.height as _);
         }
     }
+
+    fn before_poll(&self) {
+        let els = self.event_loops.lock();
+        for el in &*els {
+            if let Some(el2) = el.upgrade() {
+                el2.run();
+            }
+        }
+    }
 }
 
 struct WmData {
     wakers: Vec<Waker>,
     windows: HashMap<ffi::xcb_window_t, Weak<XWindow>>,
     parents: HashMap<ffi::xcb_window_t, Weak<XWindow>>,
+    window_to_parent: HashMap<ffi::xcb_window_t, ffi::xcb_window_t>,
     pongs: HashSet<ffi::xcb_window_t>,
 }
 
@@ -611,6 +684,29 @@ struct XEventLoopData {
     waiters: Mutex<Vec<Waker>>,
     events: Mutex<VecDeque<Event>>,
     version: Cell<u32>,
+}
+
+impl XEventLoopData {
+    fn run(&self) {
+        let mut el = self.el.lock();
+        let mut events = self.events.lock();
+        let mut saw_events = false;
+        el.run_return(|ev, _, cf| {
+            *cf = ControlFlow::Exit;
+            if let Some(ev) = map_event(ev) {
+                log::debug!("winit event: {:?}", ev);
+                events.push_back(ev);
+                saw_events = true;
+            }
+        });
+        if saw_events {
+            self.version.set(self.version.get() + 1);
+            let mut waiters = self.waiters.lock();
+            for waiter in waiters.drain(..) {
+                waiter.wake();
+            }
+        }
+    }
 }
 
 struct XEventLoop {
@@ -719,7 +815,7 @@ impl EventLoop for Arc<XEventLoop> {
             id,
             format,
             parent_id: Cell::new(0),
-            winit: Some(winit),
+            winit,
             property_generation: Cell::new(0),
             created: Cell::new(false),
             destroyed: Cell::new(false),
@@ -777,7 +873,7 @@ struct XWindow {
     id: ffi::xcb_window_t,
     format: ffi::xcb_render_directformat_t,
     parent_id: Cell<ffi::xcb_window_t>,
-    winit: Option<WWindow>,
+    winit: WWindow,
     property_generation: Cell<u32>,
     created: Cell<bool>,
     destroyed: Cell<bool>,
@@ -827,7 +923,7 @@ impl Window for Arc<XWindow> {
     }
 
     fn winit(&self) -> &WWindow {
-        self.winit.as_ref().unwrap()
+        &self.winit
     }
 
     fn properties_changed<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
@@ -1080,14 +1176,6 @@ impl Drop for XWindow {
     fn drop(&mut self) {
         let data = &self.el.data.instance;
         data.data.wm_data.lock().windows.remove(&self.id);
-        unsafe {
-            if self.parent_id.get() != 0 {
-                data.data
-                    .backend
-                    .xcb
-                    .xcb_destroy_window(data.c.c, self.parent_id.get());
-            }
-        }
     }
 }
 
@@ -1098,12 +1186,34 @@ struct XSeat {
     layout: Arc<Cell<Layout>>,
 }
 
+impl XSeat {
+    fn focus2(&self, window: ffi::xcb_window_t) {
+        unsafe {
+            let cookie = self
+                .instance
+                .data
+                .backend
+                .xinput
+                .xcb_input_xi_set_focus_checked(self.instance.c.c, window, 0, self.keyboard);
+            if let Err(e) = self
+                .instance
+                .c
+                .errors
+                .check_cookie(&self.instance.data.backend.xcb, cookie)
+            {
+                panic!("Could not set focus: {}", e);
+            }
+        }
+    }
+}
+
 impl Seat for Arc<XSeat> {
     fn add_keyboard(&self) -> Box<dyn Keyboard> {
         let id = self.instance.add_keyboard();
         self.instance.assign_slave(id, self.keyboard);
         self.instance.set_layout(id, self.layout.get(), None);
-        self.instance.set_layout(self.keyboard, self.layout.get(), None);
+        self.instance
+            .set_layout(self.keyboard, self.layout.get(), None);
         Box::new(Arc::new(XKeyboard {
             pressed_keys: Default::default(),
             dev: XDevice {
@@ -1119,22 +1229,11 @@ impl Seat for Arc<XSeat> {
 
     fn focus(&self, window: &dyn Window) {
         let window: &Arc<XWindow> = window.any().downcast_ref().unwrap();
-        unsafe {
-            let cookie = self
-                .instance
-                .data
-                .backend
-                .xinput
-                .xcb_input_xi_set_focus_checked(self.instance.c.c, window.id, 0, self.keyboard);
-            if let Err(e) = self
-                .instance
-                .c
-                .errors
-                .check_cookie(&self.instance.data.backend.xcb, cookie)
-            {
-                panic!("Could not set focus: {}", e);
-            }
-        }
+        self.focus2(window.id);
+    }
+
+    fn un_focus(&self) {
+        self.focus2(self.instance.root);
     }
 
     fn set_layout(&self, layout: Layout) {

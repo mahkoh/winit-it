@@ -478,7 +478,8 @@ impl Instance for Arc<XInstance> {
         let _lock = ENV_LOCK.lock();
         std::env::set_var("DISPLAY", format!(":{}", self.data.display));
         let el = WEventLoop::new_x11_any_thread().unwrap();
-        let xcon = el.xlib_xconnection().unwrap();
+        let el_c = el.xcb_connection().unwrap();
+        let el_fd = unsafe { self.data.backend.xcb.xcb_get_file_descriptor(el_c as _) };
         let el = Arc::new(XEventLoopData {
             instance: self.clone(),
             el: Mutex::new(el),
@@ -488,7 +489,7 @@ impl Instance for Arc<XInstance> {
         });
         let el2 = el.clone();
         let jh = tokio::task::spawn_local(async move {
-            let afd = AsyncFd::with_interest(xcon.fd, Interest::READABLE).unwrap();
+            let afd = AsyncFd::with_interest(el_fd, Interest::READABLE).unwrap();
             loop {
                 {
                     let mut el = el2.el.lock();
@@ -709,9 +710,9 @@ impl EventLoop for Arc<XEventLoop> {
 
     fn create_window(&self, builder: WindowBuilder) -> Box<dyn Window> {
         let winit = builder.build(&*self.data.el.lock()).unwrap();
-        let id = winit.xlib_window().unwrap() as _;
+        let id = winit.x11_window().unwrap();
         let format = self.get_window_format(id);
-        log::info!("Created window {}", winit.xlib_window().unwrap());
+        log::info!("Created window {}", id);
         log::info!("Pixel format: {:?}", format);
         let win = Arc::new(XWindow {
             el: self.clone(),
@@ -1102,6 +1103,7 @@ impl Seat for Arc<XSeat> {
         let id = self.instance.add_keyboard();
         self.instance.assign_slave(id, self.keyboard);
         self.instance.set_layout(id, self.layout.get(), None);
+        self.instance.set_layout(self.keyboard, self.layout.get(), None);
         Box::new(Arc::new(XKeyboard {
             pressed_keys: Default::default(),
             dev: XDevice {

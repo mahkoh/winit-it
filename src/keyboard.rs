@@ -112,5 +112,6 @@ pub enum Key {
 pub enum Layout {
     Qwerty,
     Azerty,
+    /// Qwerty with Left/Right shift swapped and Esc/Capslock swapped.
     QwertySwapped,
 }

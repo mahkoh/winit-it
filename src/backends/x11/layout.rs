@@ -389,10 +389,14 @@ fn keymap(layout: Layout) -> HashMap<u32, Vec<u32>> {
         Qwerty | Azerty => {
             res.insert(KEY_ESC, vec![XK_Escape]);
             res.insert(KEY_CAPSLOCK, vec![XK_Caps_Lock]);
+            res.insert(KEY_LEFTSHIFT, vec![XK_Shift_L]);
+            res.insert(KEY_RIGHTSHIFT, vec![XK_Shift_R]);
         }
         QwertySwapped => {
             res.insert(KEY_ESC, vec![XK_Caps_Lock]);
             res.insert(KEY_CAPSLOCK, vec![XK_Escape]);
+            res.insert(KEY_LEFTSHIFT, vec![XK_Shift_R]);
+            res.insert(KEY_RIGHTSHIFT, vec![XK_Shift_L]);
         }
     }
     match layout {
@@ -479,13 +483,11 @@ fn keymap(layout: Layout) -> HashMap<u32, Vec<u32>> {
     res.insert(KEY_J, vec![XK_j, XK_J]);
     res.insert(KEY_K, vec![XK_k, XK_K]);
     res.insert(KEY_L, vec![XK_l, XK_L]);
-    res.insert(KEY_LEFTSHIFT, vec![XK_Shift_L]);
     res.insert(KEY_X, vec![XK_x, XK_X]);
     res.insert(KEY_C, vec![XK_c, XK_C]);
     res.insert(KEY_V, vec![XK_v, XK_V]);
     res.insert(KEY_B, vec![XK_b, XK_B]);
     res.insert(KEY_N, vec![XK_n, XK_N]);
-    res.insert(KEY_RIGHTSHIFT, vec![XK_Shift_R]);
     res.insert(KEY_KPASTERISK, vec![XK_KP_Multiply]);
     res.insert(KEY_LEFTALT, vec![XK_Alt_L]);
     res.insert(KEY_SPACE, vec![XK_space]);

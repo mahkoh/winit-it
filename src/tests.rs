@@ -47,6 +47,7 @@ mod transparency;
 mod urgency;
 mod visible;
 mod window_keyboard;
+mod reset_dead_keys;
 
 use crate::backend::{BackendFlags, Instance};
 use std::future::Future;
@@ -87,5 +88,6 @@ pub fn tests() -> Vec<Box<dyn Test>> {
         Box::new(set_size::Test),
         Box::new(device_added::Test),
         Box::new(device_key::Test),
+        Box::new(reset_dead_keys::Test),
     ]
 }

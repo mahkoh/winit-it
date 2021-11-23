@@ -1,5 +1,5 @@
 use crate::backend::Instance;
-use crate::keyboard::Key::{KeyL, KeyLeftshift, KeyQ, KeyRightalt, KeyRightctrl};
+use crate::keyboard::Key::{KeyEsc, KeyL, KeyLeftbrace, KeyLeftctrl, KeyLeftshift, KeyQ, KeyRightalt, KeyRightctrl, KeyRightshift};
 use crate::keyboard::Layout;
 use winit::event::ElementState;
 use winit::keyboard::{Key as WKey, KeyCode, KeyLocation, ModifiersState};
@@ -23,11 +23,12 @@ async fn run(instance: &dyn Instance) {
             let (_, ki) = el.window_keyboard_input().await;
             assert_eq!(ki.event.physical_key, KeyCode::KeyL);
             assert_eq!(ki.event.logical_key, WKey::Character("l"));
-            assert_eq!(ki.event.text, Some("l"));
             assert_eq!(ki.event.location, KeyLocation::Standard);
             if i == 0 {
+                assert_eq!(ki.event.text, Some("l"));
                 assert_eq!(ki.event.state, ElementState::Pressed);
             } else {
+                assert_eq!(ki.event.text, None);
                 assert_eq!(ki.event.state, ElementState::Released);
             }
             assert_eq!(ki.event.repeat, false);
@@ -37,10 +38,17 @@ async fn run(instance: &dyn Instance) {
                     ki.event.mod_supplement.key_without_modifiers,
                     WKey::Character("l")
                 );
-                assert_eq!(
-                    ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
-                    Some("l")
-                );
+                if i == 0 {
+                    assert_eq!(
+                        ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                        Some("l")
+                    );
+                } else {
+                    assert_eq!(
+                        ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                        None
+                    );
+                }
             }
         }
     }
@@ -88,7 +96,11 @@ async fn run(instance: &dyn Instance) {
                 } else {
                     assert_eq!(ki.event.physical_key, KeyCode::KeyL);
                     assert_eq!(ki.event.logical_key, WKey::Character("L"));
-                    assert_eq!(ki.event.text, Some("L"));
+                    if i == 2 {
+                        assert_eq!(ki.event.text, Some("L"));
+                    } else {
+                        assert_eq!(ki.event.text, None);
+                    }
                     assert_eq!(ki.event.location, KeyLocation::Standard);
                     #[cfg(have_mod_supplement)]
                     {
@@ -96,10 +108,17 @@ async fn run(instance: &dyn Instance) {
                             ki.event.mod_supplement.key_without_modifiers,
                             WKey::Character("l")
                         );
-                        assert_eq!(
-                            ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
-                            Some("L")
-                        );
+                        if i == 2 {
+                            assert_eq!(
+                                ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                                Some("L")
+                            );
+                        } else {
+                            assert_eq!(
+                                ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                                None
+                            );
+                        }
                     }
                 }
                 if i == 0 || i == 2 {
@@ -169,11 +188,11 @@ async fn run(instance: &dyn Instance) {
                         );
                     } else {
                         assert_eq!(ki.event.logical_key, WKey::Character("l"));
-                        assert_eq!(ki.event.text, Some("l"));
+                        assert_eq!(ki.event.text, None);
                         #[cfg(have_mod_supplement)]
                         assert_eq!(
                             ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
-                            Some("l")
+                            None
                         );
                     }
                     assert_eq!(ki.event.location, KeyLocation::Standard);
@@ -230,7 +249,11 @@ async fn run(instance: &dyn Instance) {
                 } else {
                     assert_eq!(ki.event.physical_key, KeyCode::KeyL);
                     assert_eq!(ki.event.logical_key, WKey::Character("l"));
-                    assert_eq!(ki.event.text, Some("l"));
+                    if i == 2 {
+                        assert_eq!(ki.event.text, Some("l"));
+                    } else {
+                        assert_eq!(ki.event.text, None);
+                    }
                     assert_eq!(ki.event.location, KeyLocation::Standard);
                     #[cfg(have_mod_supplement)]
                     {
@@ -238,10 +261,17 @@ async fn run(instance: &dyn Instance) {
                             ki.event.mod_supplement.key_without_modifiers,
                             WKey::Character("l")
                         );
-                        assert_eq!(
-                            ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
-                            Some("\x0c")
-                        );
+                        if i == 2 {
+                            assert_eq!(
+                                ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                                Some("\x0c")
+                            );
+                        } else {
+                            assert_eq!(
+                                ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                                None
+                            );
+                        }
                     }
                 }
                 if i == 0 || i == 2 {
@@ -318,7 +348,11 @@ async fn run(instance: &dyn Instance) {
                 } else {
                     assert_eq!(ki.event.physical_key, KeyCode::KeyL);
                     assert_eq!(ki.event.logical_key, WKey::Character("L"));
-                    assert_eq!(ki.event.text, Some("L"));
+                    if i == 4 {
+                        assert_eq!(ki.event.text, Some("L"));
+                    } else {
+                        assert_eq!(ki.event.text, None);
+                    }
                     assert_eq!(ki.event.location, KeyLocation::Standard);
                     #[cfg(have_mod_supplement)]
                     {
@@ -326,10 +360,17 @@ async fn run(instance: &dyn Instance) {
                             ki.event.mod_supplement.key_without_modifiers,
                             WKey::Character("l")
                         );
-                        assert_eq!(
-                            ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
-                            Some("\x0c")
-                        );
+                        if i == 4 {
+                            assert_eq!(
+                                ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                                Some("\x0c")
+                            );
+                        } else {
+                            assert_eq!(
+                                ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                                None
+                            );
+                        }
                     }
                 }
                 if matches!(i, 0 | 2 | 4) {
@@ -449,7 +490,11 @@ async fn run(instance: &dyn Instance) {
                 } else {
                     assert_eq!(ki.event.physical_key, KeyCode::KeyL);
                     assert_eq!(ki.event.logical_key, WKey::Character("L"));
-                    assert_eq!(ki.event.text, Some("L"));
+                    if i == 4 {
+                        assert_eq!(ki.event.text, Some("L"));
+                    } else {
+                        assert_eq!(ki.event.text, None);
+                    }
                     assert_eq!(ki.event.location, KeyLocation::Standard);
                     #[cfg(have_mod_supplement)]
                     {
@@ -457,10 +502,17 @@ async fn run(instance: &dyn Instance) {
                             ki.event.mod_supplement.key_without_modifiers,
                             WKey::Character("l")
                         );
-                        assert_eq!(
-                            ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
-                            Some("\x0c")
-                        );
+                        if i == 4 {
+                            assert_eq!(
+                                ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                                Some("\x0c")
+                            );
+                        } else {
+                            assert_eq!(
+                                ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                                None
+                            );
+                        }
                     }
                 }
                 if matches!(i, 0 | 2 | 4) {
@@ -476,7 +528,7 @@ async fn run(instance: &dyn Instance) {
     seat.set_layout(Layout::Azerty);
 
     {
-        log::info!("Testing Q");
+        log::info!("Testing A (KeyQ)");
         // Q Press
         // Q Release
         {
@@ -488,7 +540,11 @@ async fn run(instance: &dyn Instance) {
             let (_, ki) = el.window_keyboard_input().await;
             assert_eq!(ki.event.physical_key, KeyCode::KeyQ);
             assert_eq!(ki.event.logical_key, WKey::Character("a"));
-            assert_eq!(ki.event.text, Some("a"));
+            if i == 0 {
+                assert_eq!(ki.event.text, Some("a"));
+            } else {
+                assert_eq!(ki.event.text, None);
+            }
             assert_eq!(ki.event.location, KeyLocation::Standard);
             #[cfg(have_mod_supplement)]
             {
@@ -496,15 +552,442 @@ async fn run(instance: &dyn Instance) {
                     ki.event.mod_supplement.key_without_modifiers,
                     WKey::Character("a")
                 );
-                assert_eq!(
-                    ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
-                    Some("a")
-                );
+                if i == 0 {
+                    assert_eq!(
+                        ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                        Some("a")
+                    );
+                } else {
+                    assert_eq!(
+                        ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                        None
+                    );
+                }
             }
             if i == 0 {
                 assert_eq!(ki.event.state, ElementState::Pressed);
             } else {
                 assert_eq!(ki.event.state, ElementState::Released);
+            }
+        }
+    }
+    {
+        log::info!("Testing â (KeyLeftbrace, KeyQ)");
+        // LeftBrace Press
+        // LeftBrace Release
+        // Q Press
+        // Q Release
+        {
+            kb.press(KeyLeftbrace);
+            kb.press(KeyQ);
+        }
+        // 0: LeftBrace pressed
+        // 1: LeftBrace released
+        // 2: Q pressed
+        // 3: Q released
+        for i in 0..4 {
+            let (_, ki) = el.window_keyboard_input().await;
+            if matches!(i, 0 | 1) {
+                assert_eq!(ki.event.physical_key, KeyCode::BracketLeft);
+                assert_eq!(ki.event.logical_key, WKey::Dead(Some('^')));
+                assert_eq!(ki.event.text, None);
+                assert_eq!(ki.event.location, KeyLocation::Standard);
+                #[cfg(have_mod_supplement)]
+                {
+                    assert_eq!(
+                        ki.event.mod_supplement.key_without_modifiers,
+                        WKey::Dead(Some('^'))
+                    );
+                    assert_eq!(
+                        ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                        None
+                    );
+                }
+                if i == 0 {
+                    assert_eq!(ki.event.state, ElementState::Pressed);
+                } else {
+                    assert_eq!(ki.event.state, ElementState::Released);
+                }
+            } else {
+                assert_eq!(ki.event.physical_key, KeyCode::KeyQ);
+                assert_eq!(ki.event.logical_key, WKey::Character("a"));
+                if i == 2 {
+                    assert_eq!(ki.event.text, Some("â"));
+                } else {
+                    assert_eq!(ki.event.text, None);
+                }
+                assert_eq!(ki.event.location, KeyLocation::Standard);
+                #[cfg(have_mod_supplement)]
+                {
+                    assert_eq!(
+                        ki.event.mod_supplement.key_without_modifiers,
+                        WKey::Character("a")
+                    );
+                    if i == 2 {
+                        assert_eq!(
+                            ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                            Some("â")
+                        );
+                    } else {
+                        assert_eq!(
+                            ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                            None
+                        );
+                    }
+                }
+            }
+            if matches!(i, 0 | 2) {
+                assert_eq!(ki.event.state, ElementState::Pressed);
+            } else {
+                assert_eq!(ki.event.state, ElementState::Released);
+            }
+        }
+    }
+    {
+        log::info!("Testing Â (KeyLeftbrace, KeyShiftLeft, KeyQ)");
+        // LeftBrace Press
+        // LeftBrace Release
+        // LeftShift Press
+        // Q Press
+        // Q Release
+        // LeftShift Release
+        {
+            kb.press(KeyLeftbrace);
+            let _shift = kb.press(KeyLeftshift);
+            kb.press(KeyQ);
+        }
+        // 0: LeftBrace pressed
+        // 1: LeftBrace released
+        // 2: LeftShift pressed
+        // 3: ModifiersChanged
+        // 4: Q pressed
+        // 5: Q released
+        // 6: LeftShift released
+        // 7: ModifiersChanged
+        for i in 0..8 {
+            if matches!(i, 3 | 7) {
+                let (_, mc) = el.window_modifiers().await;
+                if i == 3 {
+                    assert_eq!(mc, ModifiersState::SHIFT);
+                } else {
+                    assert_eq!(mc, ModifiersState::empty());
+                }
+            } else {
+                let (_, ki) = el.window_keyboard_input().await;
+                if matches!(i, 0 | 1) {
+                    assert_eq!(ki.event.physical_key, KeyCode::BracketLeft);
+                    assert_eq!(ki.event.logical_key, WKey::Dead(Some('^')));
+                    assert_eq!(ki.event.text, None);
+                    assert_eq!(ki.event.location, KeyLocation::Standard);
+                    #[cfg(have_mod_supplement)]
+                    {
+                        assert_eq!(
+                            ki.event.mod_supplement.key_without_modifiers,
+                            WKey::Dead(Some('^'))
+                        );
+                        assert_eq!(
+                            ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                            None
+                        );
+                    }
+                } else if matches!(i, 2 | 6) {
+                    assert_eq!(ki.event.physical_key, KeyCode::ShiftLeft);
+                    assert_eq!(ki.event.logical_key, WKey::Shift);
+                    assert_eq!(ki.event.text, None);
+                    assert_eq!(ki.event.location, KeyLocation::Left);
+                    #[cfg(have_mod_supplement)]
+                    {
+                        assert_eq!(ki.event.mod_supplement.key_without_modifiers, WKey::Shift);
+                        assert_eq!(
+                            ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                            None
+                        );
+                    }
+                } else {
+                    assert_eq!(ki.event.physical_key, KeyCode::KeyQ);
+                    assert_eq!(ki.event.logical_key, WKey::Character("A"));
+                    if i == 4 {
+                        assert_eq!(ki.event.text, Some("Â"));
+                    } else {
+                        assert_eq!(ki.event.text, None);
+                    }
+                    assert_eq!(ki.event.location, KeyLocation::Standard);
+                    #[cfg(have_mod_supplement)]
+                    {
+                        assert_eq!(
+                            ki.event.mod_supplement.key_without_modifiers,
+                            WKey::Character("a")
+                        );
+                        if i == 4 {
+                            assert_eq!(
+                                ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                                Some("Â")
+                            );
+                        } else {
+                            assert_eq!(
+                                ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                                None
+                            );
+                        }
+                    }
+                }
+                if matches!(i, 0 | 2 | 4) {
+                    assert_eq!(ki.event.state, ElementState::Pressed);
+                } else {
+                    assert_eq!(ki.event.state, ElementState::Released);
+                }
+            }
+        }
+    }
+    {
+        log::info!("Testing Ctrl-â (KeyLeftctrl, KeyLeftbrace, KeyQ)");
+        // LeftCtrl Press
+        // LeftBrace Press
+        // LeftBrace Release
+        // Q Press
+        // Q Release
+        // LeftCtrl Release
+        {
+            let _ctrl = kb.press(KeyLeftctrl);
+            kb.press(KeyLeftbrace);
+            kb.press(KeyQ);
+        }
+        // 0: LeftCtrl pressed
+        // 1: ModifiersChanged
+        // 2: LeftBrace pressed
+        // 3: LeftBrace released
+        // 4: Q pressed
+        // 5: Q released
+        // 6: LeftCtrl released
+        // 7: ModifiersChanged
+        for i in 0..8 {
+            if matches!(i, 1 | 7) {
+                let (_, mc) = el.window_modifiers().await;
+                if i == 1 {
+                    assert_eq!(mc, ModifiersState::CONTROL);
+                } else {
+                    assert_eq!(mc, ModifiersState::empty());
+                }
+            } else {
+                let (_, ki) = el.window_keyboard_input().await;
+                if matches!(i, 2 | 3) {
+                    assert_eq!(ki.event.physical_key, KeyCode::BracketLeft);
+                    assert_eq!(ki.event.logical_key, WKey::Dead(Some('^')));
+                    assert_eq!(ki.event.text, None);
+                    assert_eq!(ki.event.location, KeyLocation::Standard);
+                    #[cfg(have_mod_supplement)]
+                    {
+                        assert_eq!(
+                            ki.event.mod_supplement.key_without_modifiers,
+                            WKey::Dead(Some('^'))
+                        );
+                        assert_eq!(
+                            ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                            None
+                        );
+                    }
+                } else if matches!(i, 0 | 6) {
+                    assert_eq!(ki.event.physical_key, KeyCode::ControlLeft);
+                    assert_eq!(ki.event.logical_key, WKey::Control);
+                    assert_eq!(ki.event.text, None);
+                    assert_eq!(ki.event.location, KeyLocation::Left);
+                    #[cfg(have_mod_supplement)]
+                    {
+                        assert_eq!(ki.event.mod_supplement.key_without_modifiers, WKey::Control);
+                        assert_eq!(
+                            ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                            None
+                        );
+                    }
+                } else {
+                    assert_eq!(ki.event.physical_key, KeyCode::KeyQ);
+                    assert_eq!(ki.event.logical_key, WKey::Character("a"));
+                    if i == 4 {
+                        assert_eq!(ki.event.text, Some("â"));
+                    } else {
+                        assert_eq!(ki.event.text, None);
+                    }
+                    assert_eq!(ki.event.location, KeyLocation::Standard);
+                    #[cfg(have_mod_supplement)]
+                    {
+                        assert_eq!(
+                            ki.event.mod_supplement.key_without_modifiers,
+                            WKey::Character("a")
+                        );
+                        if i == 4 {
+                            assert_eq!(
+                                ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                                Some("â")
+                            );
+                        } else {
+                            assert_eq!(
+                                ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                                None
+                            );
+                        }
+                    }
+                }
+                if matches!(i, 0 | 2 | 4) {
+                    assert_eq!(ki.event.state, ElementState::Pressed);
+                } else {
+                    assert_eq!(ki.event.state, ElementState::Released);
+                }
+            }
+        }
+    }
+
+    log::info!("Switching to QwertySwapped layout.");
+    seat.set_layout(Layout::QwertySwapped);
+
+    {
+        log::info!("Testing CapsLock Q (KeyEsc, KeyQ)");
+        // Esc Press
+        // Esc Release
+        // Q Press
+        // Q Release
+        // Esc Press
+        // Esc Release
+        {
+            kb.press(KeyEsc);
+            kb.press(KeyQ);
+            kb.press(KeyEsc);
+        }
+        // 0: Esc pressed
+        // 1: Esc released
+        // 2: Q pressed
+        // 3: Q released
+        // 4: Esc pressed
+        // 5: Esc released
+        for i in 0..6 {
+            let (_, ki) = el.window_keyboard_input().await;
+            if matches!(i, 0 | 1 | 4 | 5) {
+                assert_eq!(ki.event.physical_key, KeyCode::Escape);
+                assert_eq!(ki.event.logical_key, WKey::CapsLock);
+                assert_eq!(ki.event.text, None);
+                assert_eq!(ki.event.location, KeyLocation::Standard);
+                #[cfg(have_mod_supplement)]
+                {
+                    assert_eq!(
+                        ki.event.mod_supplement.key_without_modifiers,
+                        WKey::CapsLock
+                    );
+                    assert_eq!(
+                        ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                        None
+                    );
+                }
+            } else {
+                assert_eq!(ki.event.physical_key, KeyCode::KeyQ);
+                assert_eq!(ki.event.logical_key, WKey::Character("Q"));
+                if i == 2 {
+                    assert_eq!(ki.event.text, Some("Q"));
+                } else {
+                    assert_eq!(ki.event.text, None);
+                }
+                assert_eq!(ki.event.location, KeyLocation::Standard);
+                #[cfg(have_mod_supplement)]
+                {
+                    assert_eq!(
+                        ki.event.mod_supplement.key_without_modifiers,
+                        WKey::Character("q")
+                    );
+                    if i == 2 {
+                        assert_eq!(
+                            ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                            Some("Q")
+                        );
+                    } else {
+                        assert_eq!(
+                            ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                            None
+                        );
+                    }
+                }
+            }
+            if matches!(i, 0 | 2 | 4) {
+                assert_eq!(ki.event.state, ElementState::Pressed);
+            } else {
+                assert_eq!(ki.event.state, ElementState::Released);
+            }
+        }
+    }
+
+    {
+        log::info!("Testing Shift Q (KeyLeftshift, KeyQ)");
+        // Leftshift Press
+        // Q Press
+        // Q Release
+        // Leftshift Release
+        {
+            let _shift = kb.press(KeyLeftshift);
+            kb.press(KeyQ);
+        }
+        // 0: Leftshift pressed
+        // 1: ModifiersChanged
+        // 2: Q pressed
+        // 3: Q released
+        // 4: Leftshift released
+        // 5: ModifiersChanged
+        for i in 0..6 {
+            if matches!(i, 1 | 5) {
+                let (_, mc) = el.window_modifiers().await;
+                if i == 1 {
+                    assert_eq!(mc, ModifiersState::SHIFT);
+                } else {
+                    assert_eq!(mc, ModifiersState::empty());
+                }
+            } else {
+                let (_, ki) = el.window_keyboard_input().await;
+                if matches!(i, 0 | 4) {
+                    // assert_eq!(ki.event.physical_key, KeyCode::ShiftRight);
+                    assert_eq!(ki.event.physical_key, KeyCode::ShiftLeft);
+                    assert_eq!(ki.event.logical_key, WKey::Shift);
+                    assert_eq!(ki.event.text, None);
+                    assert_eq!(ki.event.location, KeyLocation::Right);
+                    #[cfg(have_mod_supplement)]
+                        {
+                            assert_eq!(
+                                ki.event.mod_supplement.key_without_modifiers,
+                                WKey::Shift
+                            );
+                            assert_eq!(
+                                ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                                None
+                            );
+                        }
+                } else {
+                    assert_eq!(ki.event.physical_key, KeyCode::KeyQ);
+                    assert_eq!(ki.event.logical_key, WKey::Character("Q"));
+                    if i == 2 {
+                        assert_eq!(ki.event.text, Some("Q"));
+                    } else {
+                        assert_eq!(ki.event.text, None);
+                    }
+                    assert_eq!(ki.event.location, KeyLocation::Standard);
+                    #[cfg(have_mod_supplement)]
+                        {
+                            assert_eq!(
+                                ki.event.mod_supplement.key_without_modifiers,
+                                WKey::Character("q")
+                            );
+                            if i == 2 {
+                                assert_eq!(
+                                    ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                                    Some("Q")
+                                );
+                            } else {
+                                assert_eq!(
+                                    ki.event.mod_supplement.text_with_all_modifiers.as_deref(),
+                                    None
+                                );
+                            }
+                        }
+                }
+                if matches!(i, 0 | 2) {
+                    assert_eq!(ki.event.state, ElementState::Pressed);
+                } else {
+                    assert_eq!(ki.event.state, ElementState::Released);
+                }
             }
         }
     }

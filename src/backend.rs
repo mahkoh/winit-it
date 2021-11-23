@@ -228,6 +228,11 @@ pub trait Window {
 pub const NONE_SIZE: Option<Size> = None;
 
 impl dyn Window {
+    pub fn reset_dead_keys(&self) {
+        log::info!("Resetting dead keys");
+        self.winit().reset_dead_keys();
+    }
+
     pub fn winit_set_decorations(&self, decorations: bool) {
         log::info!(
             "Setting decorations of window {} to {}",
@@ -486,6 +491,7 @@ impl dyn Window {
         self.await_winit(|w| {
             let is = w.inner_size();
             let os = w.outer_size();
+            log::trace!("Inner size: {:?}, outer size: {:?}", is, os);
             let (left, right, top, bottom) = self.frame_extents();
             is.width == width
                 && is.height == height

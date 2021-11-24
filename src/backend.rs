@@ -1,5 +1,5 @@
 use crate::event::{
-    DeviceEvent, DeviceEventExt, Event, WindowEvent, WindowEventExt, WindowKeyboardInput,
+    DeviceEvent, DeviceEventExt, Event, UserEvent, WindowEvent, WindowEventExt, WindowKeyboardInput,
 };
 use crate::keyboard::{Key, Layout};
 use std::any::Any;
@@ -8,7 +8,9 @@ use std::future::Future;
 use std::pin::Pin;
 use winit::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
 use winit::event::{DeviceId, RawKeyEvent};
+use winit::event_loop::EventLoop as WEventLoop;
 use winit::keyboard::ModifiersState;
+use winit::monitor::MonitorHandle;
 use winit::window::{Icon, UserAttentionType, Window as WWindow, WindowBuilder, WindowId};
 
 bitflags::bitflags! {
@@ -33,6 +35,8 @@ bitflags::bitflags! {
         const DEVICE_ADDED = 1 << 17;
         const DEVICE_REMOVED = 1 << 18;
         const CREATE_SEAT = 1 << 19;
+        const SECOND_MONITOR = 1 << 20;
+        const MONITOR_NAMES = 1 << 21;
     }
 }
 
@@ -51,15 +55,54 @@ pub trait Instance {
     fn create_seat(&self) -> Box<dyn Seat> {
         unimplemented!();
     }
+    fn enable_second_monitor(&self, enabled: bool) {
+        let _ = enabled;
+        unimplemented!();
+    }
 }
 
 pub trait EventLoop {
     fn event<'a>(&'a self) -> Pin<Box<dyn Future<Output = Event> + 'a>>;
     fn changed<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>>;
     fn create_window(&self, builder: WindowBuilder) -> Box<dyn Window>;
+    fn with_winit<'a>(&self, f: Box<dyn FnOnce(&mut WEventLoop<UserEvent>) + 'a>);
 }
 
 impl dyn EventLoop {
+    pub fn send_event(&self, event: UserEvent) {
+        self.with_winit(Box::new(|el| el.create_proxy().send_event(event).unwrap()));
+    }
+
+    pub fn available_monitors(&self) -> Vec<MonitorHandle> {
+        let mut res = vec![];
+        self.with_winit(Box::new(|el| res.extend(el.available_monitors())));
+        res
+    }
+
+    pub fn primary_monitor(&self) -> Option<MonitorHandle> {
+        let mut res = None;
+        self.with_winit(Box::new(|el| res = el.primary_monitor()));
+        res
+    }
+
+    pub async fn num_available_monitors(&self, n: usize) {
+        log::info!("Waiting for number of available monitors to become {}", n);
+        loop {
+            if self.available_monitors().len() == n {
+                return;
+            }
+            self.changed().await;
+        }
+    }
+
+    pub async fn user_event(&self) -> UserEvent {
+        loop {
+            if let Event::UserEvent(ue) = self.event().await {
+                return ue;
+            }
+        }
+    }
+
     pub async fn window_event(&self) -> WindowEventExt {
         loop {
             if let Event::WindowEvent(we) = self.event().await {

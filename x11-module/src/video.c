@@ -157,11 +157,17 @@ static Bool pre_init(ScrnInfoPtr pScrn, int flags) {
 
   DisplayModePtr mode1 = calloc(1, sizeof(DisplayModeRec));
   mode1->name = strdup("1024x768");
+  mode1->Clock = 60;
+  mode1->HTotal = 10;
+  mode1->VTotal = 100;
   mode1->HDisplay = 1024;
   mode1->VDisplay = 768;
 
   DisplayModePtr mode2 = calloc(1, sizeof(DisplayModeRec));
   mode2->name = strdup("800x600");
+  mode2->Clock = 120;
+  mode2->HTotal = 10;
+  mode2->VTotal = 100;
   mode2->HDisplay = 800;
   mode2->VDisplay = 600;
 
@@ -318,9 +324,27 @@ void video_init(pointer module) {
   xf86AddDriver(&driver, module, HaveDriverFuncs);
 }
 
-void video_connect_second_monitor() {
-  driver.outputs[1].connected ^= 1;
+void video_connect_second_monitor(uint32_t connected) {
+  driver.outputs[1].connected = connected;
+  driver.outputs[1].output->mm_width = 20;
+  driver.outputs[1].output->mm_height = 20;
   RRSetChanged(driver.screen);
   xf86RandR12TellChanged(driver.screen);
   RRGetInfo(driver.screen, TRUE);
+}
+
+void video_get_info(uint32_t *second_crtc, uint32_t *first_output, uint32_t *second_output, uint32_t *small_mode_id, uint32_t *large_mode_id) {
+  *second_crtc = driver.outputs[1].crtc->randr_crtc->id;
+  *first_output = driver.outputs[0].output->randr_output->id;
+  *second_output = driver.outputs[1].output->randr_output->id;
+  RROutputPtr output = driver.outputs[0].output->randr_output;
+  for (int i = 0; i < output->numModes; i++) {
+    RRModePtr mode = output->modes[i];
+    ErrorF("width: %d\n", mode->mode.width);
+    if (mode->mode.width == 1024) {
+      *large_mode_id = mode->mode.id;
+    } else {
+      *small_mode_id = mode->mode.id;
+    }
+  }
 }

@@ -4,7 +4,8 @@
 #include <stdint.h>
 
 void video_init(pointer module);
-void video_connect_second_monitor();
+void video_connect_second_monitor(uint32_t connected);
+void video_get_info(uint32_t *second_crtc, uint32_t *first_output, uint32_t *second_output, uint32_t *small_mode_id, uint32_t *large_mode_id);
 
 void input_init();
 uint32_t input_new_keyboard();

@@ -14,7 +14,23 @@ use xcb_dl_util::property::XcbGetPropertyError;
 pub(super) fn run(instance: Arc<XInstanceData>) -> impl Future<Output = ()> {
     unsafe {
         let xcb = &instance.backend.xcb;
+        let xrandr = &instance.backend.xrandr;
         let c = XConnection::new(&instance.backend, instance.display);
+        let mut err = ptr::null_mut();
+        let reply = xrandr.xcb_randr_query_version_reply(
+            c.c,
+            xrandr.xcb_randr_query_version(c.c, 1, 3),
+            &mut err,
+        );
+        if let Err(e) = c.errors.check(xcb, reply, err) {
+            panic!("Could not enable randr: {}", e);
+        }
+        let first_randr_event =
+            (*xcb.xcb_get_extension_data(c.c, xrandr.xcb_randr_id())).first_event;
+        let cookie = xrandr.xcb_randr_select_input_checked(c.c, c.screen.root, 0xff);
+        if let Err(e) = c.errors.check_cookie(xcb, cookie) {
+            panic!("Can't listen for randr events: {}", e);
+        }
         let events = ffi::XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT
             | ffi::XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY
             | ffi::XCB_EVENT_MASK_PROPERTY_CHANGE;
@@ -113,6 +129,7 @@ pub(super) fn run(instance: Arc<XInstanceData>) -> impl Future<Output = ()> {
             c,
             instance,
             window_id,
+            first_randr_event,
         };
 
         wm.run()
@@ -123,6 +140,7 @@ struct Wm {
     c: XConnection,
     instance: Arc<XInstanceData>,
     window_id: ffi::xcb_window_t,
+    first_randr_event: u8,
 }
 
 impl Drop for Wm {
@@ -180,10 +198,81 @@ impl Wm {
             ffi::XCB_CLIENT_MESSAGE => self.handle_client_message(event),
             ffi::XCB_CONFIGURE_NOTIFY => self.handle_configure_notify(event),
             ffi::XCB_MAPPING_NOTIFY => {}
+            n if n == self.first_randr_event + ffi::XCB_RANDR_SCREEN_CHANGE_NOTIFY => {
+                self.handle_randr_screen_change_notify(event);
+            }
+            n if n == self.first_randr_event + ffi::XCB_RANDR_NOTIFY => {
+                self.handle_randr_notify(event);
+            }
             _ => {
                 log::warn!("Received unexpected event: {:?}", event);
             }
         }
+    }
+
+    fn handle_randr_screen_change_notify(&mut self, event: &ffi::xcb_generic_event_t) {
+        let event =
+            unsafe { &*(event as *const _ as *const ffi::xcb_randr_screen_change_notify_event_t) };
+        log::info!("{:?}", event);
+    }
+
+    fn handle_randr_notify(&mut self, event: &ffi::xcb_generic_event_t) {
+        let event = unsafe { &*(event as *const _ as *const ffi::xcb_randr_notify_event_t) };
+        match event.sub_code as u32 {
+            ffi::XCB_RANDR_NOTIFY_CRTC_CHANGE => self.handle_randr_notify_crtc_change(event),
+            ffi::XCB_RANDR_NOTIFY_OUTPUT_CHANGE => self.handle_randr_notify_output_change(event),
+            ffi::XCB_RANDR_NOTIFY_OUTPUT_PROPERTY => {
+                self.handle_randr_notify_output_property(event)
+            }
+            ffi::XCB_RANDR_NOTIFY_PROVIDER_CHANGE => {
+                self.handle_randr_notify_provider_change(event)
+            }
+            ffi::XCB_RANDR_NOTIFY_PROVIDER_PROPERTY => {
+                self.handle_randr_notify_provider_property(event)
+            }
+            ffi::XCB_RANDR_NOTIFY_RESOURCE_CHANGE => {
+                self.handle_randr_notify_resource_change(event)
+            }
+            ffi::XCB_RANDR_NOTIFY_LEASE => self.handle_randr_notify_lease(event),
+            _ => {
+                log::warn!("Unexpected randr event: {:?}", event);
+            }
+        }
+    }
+
+    fn handle_randr_notify_crtc_change(&mut self, event: &ffi::xcb_randr_notify_event_t) {
+        let cc = unsafe { &event.u.cc };
+        log::info!("{:?}", cc);
+    }
+
+    fn handle_randr_notify_output_change(&mut self, event: &ffi::xcb_randr_notify_event_t) {
+        let cc = unsafe { &event.u.oc };
+        log::info!("{:?}", cc);
+    }
+
+    fn handle_randr_notify_output_property(&mut self, event: &ffi::xcb_randr_notify_event_t) {
+        let cc = unsafe { &event.u.op };
+        log::info!("{:?}", cc);
+    }
+
+    fn handle_randr_notify_provider_change(&mut self, event: &ffi::xcb_randr_notify_event_t) {
+        let cc = unsafe { &event.u.pc };
+        log::info!("{:?}", cc);
+    }
+
+    fn handle_randr_notify_provider_property(&mut self, event: &ffi::xcb_randr_notify_event_t) {
+        let cc = unsafe { &event.u.pp };
+        log::info!("{:?}", cc);
+    }
+
+    fn handle_randr_notify_resource_change(&mut self, event: &ffi::xcb_randr_notify_event_t) {
+        let cc = unsafe { &event.u.rc };
+        log::info!("{:?}", cc);
+    }
+
+    fn handle_randr_notify_lease(&mut self, event: &ffi::xcb_randr_notify_event_t) {
+        let cc = unsafe { &event.u.lc };
+        log::info!("{:?}", cc);
     }
 
     fn handle_property_notify(&mut self, event: &ffi::xcb_generic_event_t) {

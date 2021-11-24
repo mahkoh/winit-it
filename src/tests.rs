@@ -25,6 +25,7 @@ macro_rules! test {
 }
 
 mod always_on_top;
+mod available_monitors;
 #[cfg(target_os = "linux")]
 mod class;
 mod decorations;
@@ -32,6 +33,8 @@ mod delete_window;
 mod destroyed;
 mod device_added;
 mod device_key;
+mod focused;
+mod focused_multi_seat;
 mod icon;
 mod maximize;
 mod minimize;
@@ -40,6 +43,7 @@ mod physical_outer_position;
 mod physical_size_bounds;
 #[cfg(target_os = "linux")]
 mod ping;
+mod primary_monitor;
 mod reset_dead_keys;
 mod resizable;
 mod set_position;
@@ -47,10 +51,9 @@ mod set_size;
 mod title;
 mod transparency;
 mod urgency;
+mod user_event;
 mod visible;
 mod window_keyboard;
-mod focused;
-mod focused_multi_seat;
 
 use crate::backend::{BackendFlags, Instance};
 use std::future::Future;
@@ -95,5 +98,8 @@ pub fn tests() -> Vec<Box<dyn Test>> {
         Box::new(destroyed::Test),
         Box::new(focused::Test),
         Box::new(focused_multi_seat::Test),
+        Box::new(user_event::Test),
+        Box::new(available_monitors::Test),
+        Box::new(primary_monitor::Test),
     ]
 }

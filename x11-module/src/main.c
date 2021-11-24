@@ -19,12 +19,25 @@ enum MessageType {
   MT_KEY_PRESS,
   MT_KEY_RELEASE,
   MT_REMOVE_DEVICE,
+  MT_ENABLE_SECOND_MONITOR,
+  MT_ENABLE_SECOND_MONITOR_REPLY,
+  MT_GET_VIDEO_INFO,
+  MT_GET_VIDEO_INFO_REPLY,
 };
 
 typedef struct {
   uint32_t type;
   uint32_t id;
 } CreateKeyboardReply;
+
+typedef struct {
+  uint32_t type;
+  uint32_t second_crtc;
+  uint32_t second_output;
+  uint32_t first_output;
+  uint32_t large_mode_id;
+  uint32_t small_mode_id;
+} GetVideoInfoReply;
 
 typedef union {
   uint32_t type;
@@ -37,6 +50,10 @@ typedef union {
     uint32_t type;
     uint32_t id;
   } remove_device;
+  struct {
+    uint32_t type;
+    uint32_t enable;
+  } enable_second_monitor;
 } Message;
 
 static void handle_message(int fd, void *closure) {
@@ -61,6 +78,22 @@ static void handle_message(int fd, void *closure) {
   case MT_REMOVE_DEVICE:
     input_remove_device(message.remove_device.id);
     break;
+  case MT_ENABLE_SECOND_MONITOR: {
+    video_connect_second_monitor(message.enable_second_monitor.enable);
+    Message reply = {
+        .type = MT_ENABLE_SECOND_MONITOR_REPLY,
+    };
+    assert(write(fd, &reply, sizeof(reply)) > 0);
+    break;
+  }
+  case MT_GET_VIDEO_INFO: {
+    GetVideoInfoReply reply = {
+        .type = MT_GET_VIDEO_INFO_REPLY,
+    };
+    video_get_info(&reply.second_crtc, &reply.first_output, &reply.second_output, &reply.small_mode_id, &reply.large_mode_id);
+    assert(write(fd, &reply, sizeof(reply)) > 0);
+    break;
+  }
   default:
     LogMessage(X_ERROR, "Invalid message type %u\n", message.type);
     assert(0 && "Invalid message type");

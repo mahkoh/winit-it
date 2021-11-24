@@ -4,32 +4,38 @@ use crate::backend::{
 };
 use crate::backends::x11::layout::{layouts, set_names, Layouts};
 use crate::backends::x11::wm::TITLE_HEIGHT;
-use crate::backends::x11::MessageType::MT_REMOVE_DEVICE;
+use crate::backends::x11::MessageType::{
+    MT_ENABLE_SECOND_MONITOR, MT_ENABLE_SECOND_MONITOR_REPLY, MT_GET_VIDEO_INFO,
+    MT_GET_VIDEO_INFO_REPLY, MT_REMOVE_DEVICE,
+};
 use crate::event::{map_event, Event, UserEvent};
 use crate::keyboard::{Key, Layout};
+use bstr::ByteSlice;
 use parking_lot::Mutex;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
 use std::future::Future;
+use std::io::Write;
 use std::pin::Pin;
 use std::process::Command;
-use std::io::Write;
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Waker};
 use std::{mem, ptr};
-use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
+use tokio::io::Interest;
 use tokio::task::JoinHandle;
 use uapi::c::{AF_UNIX, O_CLOEXEC, SOCK_CLOEXEC, SOCK_SEQPACKET};
 use uapi::{pipe2, socketpair, IntoUstr, OwnedFd, Pod, UapiReadExt, UstrPtr};
 use winit::event::DeviceId;
 use winit::event_loop::{ControlFlow, EventLoop as WEventLoop};
 use winit::platform::run_return::EventLoopExtRunReturn;
-use winit::platform::unix::{DeviceIdExtUnix, EventLoopExtUnix, EventLoopWindowTargetExtUnix, WindowExtUnix};
+use winit::platform::unix::{
+    DeviceIdExtUnix, EventLoopExtUnix, EventLoopWindowTargetExtUnix, WindowExtUnix,
+};
 use winit::window::{Window as WWindow, WindowBuilder};
-use xcb_dl::{ffi, Xcb, XcbRender, XcbXinput, XcbXkb};
+use xcb_dl::{ffi, Xcb, XcbRandr, XcbRender, XcbXinput, XcbXkb};
 use xcb_dl_util::error::XcbErrorParser;
 use MessageType::{MT_CREATE_KEYBOARD, MT_CREATE_KEYBOARD_REPLY, MT_KEY_PRESS, MT_KEY_RELEASE};
 
@@ -40,8 +46,8 @@ mod wm;
 
 static ENV_LOCK: Mutex<()> = parking_lot::const_mutex(());
 
-const DEFAULT_X_PATH: &str = "/usr/lib/Xorg";
-// const DEFAULT_X_PATH: &str = "/home/julian/c/xserver/install/bin/X";
+// const DEFAULT_X_PATH: &str = "/usr/lib/Xorg";
+const DEFAULT_X_PATH: &str = "/home/julian/c/xserver/install/bin/X";
 
 pub fn backend() -> Box<dyn Backend> {
     let x_path = match std::env::var("X_PATH") {
@@ -62,6 +68,7 @@ pub fn backend() -> Box<dyn Backend> {
                 .to_string(),
             xcb: Xcb::load_loose().unwrap(),
             xinput: XcbXinput::load_loose().unwrap(),
+            xrandr: XcbRandr::load_loose().unwrap(),
             render: XcbRender::load_loose().unwrap(),
             xkb: XcbXkb::load_loose().unwrap(),
             layouts: layouts(),
@@ -74,6 +81,7 @@ struct XBackend {
     default_module_path: String,
     xcb: Xcb,
     xinput: XcbXinput,
+    xrandr: XcbRandr,
     render: XcbRender,
     xkb: XcbXkb,
     layouts: Layouts,
@@ -150,6 +158,21 @@ impl Backend for Arc<XBackend> {
             .unwrap();
         log::trace!("display: {}", display);
 
+        let (second_crtc, second_output, first_output, large_mode_id, small_mode_id);
+        unsafe {
+            let mut msg = Message {
+                ty: MT_GET_VIDEO_INFO as _,
+            };
+            uapi::write(psock.raw(), &msg).unwrap();
+            uapi::read(psock.raw(), &mut msg).unwrap();
+            assert_eq!(msg.ty, MT_GET_VIDEO_INFO_REPLY as _);
+            second_crtc = msg.get_video_info_reply.second_crtc;
+            second_output = msg.get_video_info_reply.second_output;
+            first_output = msg.get_video_info_reply.first_output;
+            large_mode_id = msg.get_video_info_reply.large_mode_id;
+            small_mode_id = msg.get_video_info_reply.small_mode_id;
+        }
+
         let mut instance = XInstanceData {
             backend: self.clone(),
             xserver_pid: chpid,
@@ -163,9 +186,21 @@ impl Backend for Arc<XBackend> {
                 pongs: Default::default(),
             }),
             atoms: Default::default(),
+            second_crtc,
+            second_output,
+            first_output,
+            large_mode_id,
+            small_mode_id,
         };
 
         let c = XConnection::new(self, display);
+
+        unsafe {
+            let cookie =
+                self.xrandr
+                    .xcb_randr_set_output_primary_checked(c.c, c.screen.root, first_output);
+            c.errors.check_cookie(&self.xcb, cookie).unwrap();
+        }
 
         instance.atoms.net_wm_state = c.atom("_NET_WM_STATE");
         instance.atoms.wm_change_state = c.atom("WM_CHANGE_STATE");
@@ -204,6 +239,12 @@ impl Backend for Arc<XBackend> {
                 &mut err,
             );
             c.errors.check(&self.xcb, reply, err).unwrap();
+            let reply = self.xrandr.xcb_randr_query_version_reply(
+                c.c,
+                self.xrandr.xcb_randr_query_version(c.c, 1, 3),
+                &mut err,
+            );
+            c.errors.check(&self.xcb, reply, err).unwrap();
             let cookie = self.xinput.xcb_input_xi_query_version(c.c, 2, 0);
             let reply = self
                 .xinput
@@ -232,7 +273,10 @@ impl Backend for Arc<XBackend> {
         };
 
         let root = unsafe {
-            let screen = *self.xcb.xcb_setup_roots_iterator(self.xcb.xcb_get_setup(c.c)).data;
+            let screen = *self
+                .xcb
+                .xcb_setup_roots_iterator(self.xcb.xcb_get_setup(c.c))
+                .data;
             screen.root
         };
 
@@ -274,6 +318,8 @@ impl Backend for Arc<XBackend> {
             | BackendFlags::DEVICE_ADDED
             | BackendFlags::DEVICE_REMOVED
             | BackendFlags::CREATE_SEAT
+            | BackendFlags::SECOND_MONITOR
+            | BackendFlags::MONITOR_NAMES
     }
 }
 
@@ -341,6 +387,11 @@ struct XInstanceData {
     display: u32,
     wm_data: Mutex<WmData>,
     atoms: Atoms,
+    second_crtc: u32,
+    second_output: u32,
+    first_output: u32,
+    large_mode_id: u32,
+    small_mode_id: u32,
 }
 
 struct XInstance {
@@ -511,7 +562,8 @@ impl Instance for Arc<XInstance> {
             };
             write!(&mut change.name[..], "{}", name).unwrap();
             log::info!("{:?}", change);
-            let cookie = xinput.xcb_input_xi_change_hierarchy_checked(self.c.c, 1, &change as *const _ as _);
+            let cookie =
+                xinput.xcb_input_xi_change_hierarchy_checked(self.c.c, 1, &change as *const _ as _);
             if let Err(e) = self.c.errors.check_cookie(xcb, cookie) {
                 panic!("Could not add master: {}", e);
             }
@@ -564,6 +616,7 @@ impl Instance for Arc<XInstance> {
             waiters: Default::default(),
             events: Default::default(),
             version: Cell::new(1),
+            cached_num_monitors: Cell::new(usize::MAX),
         });
         let el2 = el.clone();
         let jh = tokio::task::spawn_local(async move {
@@ -631,6 +684,61 @@ impl Instance for Arc<XInstance> {
             }
         }
     }
+
+    fn enable_second_monitor(&self, enabled: bool) {
+        unsafe {
+            let mut msg = Message {
+                enable_second_monitor: EnableSecondMonitor {
+                    ty: MT_ENABLE_SECOND_MONITOR as _,
+                    enable: enabled as _,
+                },
+            };
+            uapi::write(self.data.sock.raw(), &msg).unwrap();
+            uapi::read(self.data.sock.raw(), &mut msg).unwrap();
+            assert_eq!(msg.ty, MT_ENABLE_SECOND_MONITOR_REPLY as _);
+            let xrandr = &self.data.backend.xrandr;
+            let xcb = &self.data.backend.xcb;
+            let mut err = ptr::null_mut();
+            for step in 0..2 {
+                if step == 0 && enabled || step == 1 && !enabled {
+                    let cookie = xrandr.xcb_randr_set_screen_size_checked(
+                        self.c.c,
+                        self.c.screen.root,
+                        if enabled { 1024 + 800 } else { 1024 },
+                        768,
+                        1,
+                        1,
+                    );
+                    self.c.errors.check_cookie(xcb, cookie).unwrap();
+                } else {
+                    let cookie = xrandr.xcb_randr_set_crtc_config(
+                        self.c.c,
+                        self.data.second_crtc,
+                        0,
+                        0,
+                        if enabled { 1024 } else { 0 },
+                        0,
+                        if enabled { self.data.small_mode_id } else { 0 },
+                        ffi::XCB_RANDR_ROTATION_ROTATE_0 as _,
+                        if enabled { 1 } else { 0 },
+                        &self.data.second_output,
+                    );
+                    let reply = xrandr.xcb_randr_set_crtc_config_reply(self.c.c, cookie, &mut err);
+                    self.c.errors.check(xcb, reply, err).unwrap();
+                }
+            }
+            let cookie = xrandr.xcb_randr_set_output_primary_checked(
+                self.c.c,
+                self.c.screen.root,
+                if enabled {
+                    self.data.second_output
+                } else {
+                    self.data.first_output
+                },
+            );
+            self.c.errors.check_cookie(xcb, cookie);
+        }
+    }
 }
 
 struct WmData {
@@ -684,22 +792,30 @@ struct XEventLoopData {
     waiters: Mutex<Vec<Waker>>,
     events: Mutex<VecDeque<Event>>,
     version: Cell<u32>,
+    cached_num_monitors: Cell<usize>,
 }
 
 impl XEventLoopData {
     fn run(&self) {
         let mut el = self.el.lock();
         let mut events = self.events.lock();
-        let mut saw_events = false;
+        let mut wake = false;
         el.run_return(|ev, _, cf| {
             *cf = ControlFlow::Exit;
             if let Some(ev) = map_event(ev) {
                 log::debug!("winit event: {:?}", ev);
                 events.push_back(ev);
-                saw_events = true;
+                wake = true;
             }
         });
-        if saw_events {
+        if !wake {
+            let num_monitors = el.available_monitors().count();
+            if num_monitors != self.cached_num_monitors.get() {
+                self.cached_num_monitors.set(num_monitors);
+                wake = true;
+            }
+        }
+        if wake {
             self.version.set(self.version.get() + 1);
             let mut waiters = self.waiters.lock();
             for waiter in waiters.drain(..) {
@@ -851,6 +967,10 @@ impl EventLoop for Arc<XEventLoop> {
             .windows
             .insert(win.id, Arc::downgrade(&win));
         Box::new(win)
+    }
+
+    fn with_winit<'a>(&self, f: Box<dyn FnOnce(&mut WEventLoop<UserEvent>) + 'a>) {
+        f(&mut *self.data.el.lock());
     }
 }
 
@@ -1385,6 +1505,10 @@ enum MessageType {
     MT_KEY_PRESS,
     MT_KEY_RELEASE,
     MT_REMOVE_DEVICE,
+    MT_ENABLE_SECOND_MONITOR,
+    MT_ENABLE_SECOND_MONITOR_REPLY,
+    MT_GET_VIDEO_INFO,
+    MT_GET_VIDEO_INFO_REPLY,
 }
 
 #[repr(C)]
@@ -1394,6 +1518,8 @@ union Message {
     create_keyboard_reply: CreateKeyboardReply,
     key_press: KeyPress,
     remove_device: RemoveDevice,
+    enable_second_monitor: EnableSecondMonitor,
+    get_video_info_reply: GetVideoInfoReply,
 }
 
 unsafe impl Pod for Message {}
@@ -1403,6 +1529,24 @@ unsafe impl Pod for Message {}
 struct CreateKeyboardReply {
     ty: u32,
     id: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct EnableSecondMonitor {
+    ty: u32,
+    enable: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct GetVideoInfoReply {
+    ty: u32,
+    second_crtc: u32,
+    second_output: u32,
+    first_output: u32,
+    large_mode_id: u32,
+    small_mode_id: u32,
 }
 
 #[repr(C)]

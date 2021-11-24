@@ -12,7 +12,7 @@ use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{Theme, WindowId};
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct UserEvent {}
+pub struct UserEvent(pub usize);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModSupplement {

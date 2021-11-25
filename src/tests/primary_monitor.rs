@@ -1,7 +1,4 @@
 use crate::backend::{BackendFlags, Instance};
-use std::time::Duration;
-use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::monitor::VideoMode;
 
 test!(run, BackendFlags::SECOND_MONITOR);
 
@@ -23,6 +20,4 @@ async fn run(instance: &dyn Instance) {
     el.num_available_monitors(1).await;
     let monitor = el.primary_monitor().unwrap();
     assert_eq!(monitor.position().x, 0);
-
-    tokio::time::sleep(Duration::from_secs(1)).await;
 }

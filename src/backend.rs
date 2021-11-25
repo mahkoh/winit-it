@@ -37,8 +37,11 @@ bitflags::bitflags! {
         const CREATE_SEAT = 1 << 19;
         const SECOND_MONITOR = 1 << 20;
         const MONITOR_NAMES = 1 << 21;
+        const SINGLE_THREADED = 1 << 22;
     }
 }
+
+pub const NON_REQUIREMENT_FLAGS: BackendFlags = BackendFlags::SINGLE_THREADED;
 
 pub trait Backend: Sync {
     fn instantiate(&self) -> Box<dyn Instance>;

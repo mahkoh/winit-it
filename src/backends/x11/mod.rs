@@ -10,7 +10,6 @@ use crate::backends::x11::MessageType::{
 };
 use crate::event::{map_event, Event, UserEvent};
 use crate::keyboard::{Key, Layout};
-use bstr::ByteSlice;
 use parking_lot::Mutex;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -38,13 +37,12 @@ use winit::window::{Window as WWindow, WindowBuilder};
 use xcb_dl::{ffi, Xcb, XcbRandr, XcbRender, XcbXinput, XcbXkb};
 use xcb_dl_util::error::XcbErrorParser;
 use MessageType::{MT_CREATE_KEYBOARD, MT_CREATE_KEYBOARD_REPLY, MT_KEY_PRESS, MT_KEY_RELEASE};
+use crate::env::{set_env};
 
 mod evdev;
 mod keysyms;
 mod layout;
 mod wm;
-
-static ENV_LOCK: Mutex<()> = parking_lot::const_mutex(());
 
 // const DEFAULT_X_PATH: &str = "/usr/lib/Xorg";
 const DEFAULT_X_PATH: &str = "/home/julian/c/xserver/install/bin/X";
@@ -189,7 +187,7 @@ impl Backend for Arc<XBackend> {
             second_crtc,
             second_output,
             first_output,
-            large_mode_id,
+            _large_mode_id: large_mode_id,
             small_mode_id,
         };
 
@@ -390,7 +388,7 @@ struct XInstanceData {
     second_crtc: u32,
     second_output: u32,
     first_output: u32,
-    large_mode_id: u32,
+    _large_mode_id: u32,
     small_mode_id: u32,
 }
 
@@ -605,9 +603,10 @@ impl Instance for Arc<XInstance> {
     }
 
     fn create_event_loop(&self) -> Box<dyn EventLoop> {
-        let _lock = ENV_LOCK.lock();
-        std::env::set_var("DISPLAY", format!(":{}", self.data.display));
-        let el = WEventLoop::new_x11_any_thread().unwrap();
+        let el = {
+            let _var = set_env("DISPLAY", &format!(":{}", self.data.display));
+            WEventLoop::new_x11_any_thread().unwrap()
+        };
         let el_c = el.xcb_connection().unwrap();
         let el_fd = unsafe { self.data.backend.xcb.xcb_get_file_descriptor(el_c as _) };
         let el = Arc::new(XEventLoopData {
@@ -736,7 +735,7 @@ impl Instance for Arc<XInstance> {
                     self.data.first_output
                 },
             );
-            self.c.errors.check_cookie(xcb, cookie);
+            self.c.errors.check_cookie(xcb, cookie).unwrap();
         }
     }
 }

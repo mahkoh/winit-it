@@ -1,4 +1,4 @@
-use crate::backend::{Backend, BackendFlags};
+use crate::backend::{Backend, BackendFlags, NON_REQUIREMENT_FLAGS};
 use crate::test::TestData;
 use crate::tests::Test;
 use crate::tlog::LogState;
@@ -32,7 +32,8 @@ pub fn run_tests(exec: &Execution, backend: &dyn Backend, tests: &[Box<dyn Test>
         run_test_outer(&be, backend, &**test, idx + 1, tests.len(), &num_failed)
     };
     if backend.flags().contains(BackendFlags::MT_SAFE) {
-        tests.par_iter().enumerate().for_each(rto);
+        tests.par_iter().enumerate().filter(|(_, t)| !t.flags().contains(BackendFlags::SINGLE_THREADED)).for_each(rto);
+        tests.iter().enumerate().filter(|(_, t)| t.flags().contains(BackendFlags::SINGLE_THREADED)).for_each(rto);
     } else {
         tests.iter().enumerate().for_each(rto);
     }
@@ -52,7 +53,7 @@ fn run_test_outer(
     num_failed: &AtomicUsize,
 ) {
     let failed = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let missing_flags = test.required_flags() & !backend.flags();
+        let missing_flags = test.flags() & !backend.flags() & !NON_REQUIREMENT_FLAGS;
         if !missing_flags.is_empty() {
             log::warn!(
                 "{}/{}: Skipping unsupported test {}. Missing flags: {:?}",

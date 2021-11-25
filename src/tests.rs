@@ -17,7 +17,7 @@ macro_rules! test {
                 Box::pin($f(instance))
             }
 
-            fn required_flags(&self) -> crate::backend::BackendFlags {
+            fn flags(&self) -> crate::backend::BackendFlags {
                 $flags
             }
         }
@@ -63,7 +63,7 @@ pub trait Test: Sync {
     fn name(&self) -> &str;
     fn run<'a>(&'a self, instance: &'a dyn Instance) -> Pin<Box<dyn Future<Output = ()> + 'a>>;
 
-    fn required_flags(&self) -> BackendFlags {
+    fn flags(&self) -> BackendFlags {
         BackendFlags::empty()
     }
 }

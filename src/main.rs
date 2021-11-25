@@ -13,8 +13,10 @@ mod screenshot;
 mod test;
 mod tests;
 mod tlog;
+mod env;
 
 fn main() {
+    env::reset_env();
     tlog::init();
     ThreadPoolBuilder::new()
         .thread_name(|i| format!("rayon-{}", i))

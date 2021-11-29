@@ -23,6 +23,12 @@ enum MessageType {
   MT_ENABLE_SECOND_MONITOR_REPLY,
   MT_GET_VIDEO_INFO,
   MT_GET_VIDEO_INFO_REPLY,
+  MT_CREATE_MOUSE,
+  MT_CREATE_MOUSE_REPLY,
+  MT_BUTTON_PRESS,
+  MT_BUTTON_RELEASE,
+  MT_MOUSE_MOVE,
+  MT_MOUSE_SCROLL,
 };
 
 typedef struct {
@@ -49,6 +55,12 @@ typedef union {
   struct {
     uint32_t type;
     uint32_t id;
+    int32_t dx;
+    int32_t dy;
+  } mouse_move;
+  struct {
+    uint32_t type;
+    uint32_t id;
   } remove_device;
   struct {
     uint32_t type;
@@ -69,11 +81,32 @@ static void handle_message(int fd, void *closure) {
     assert(write(fd, &reply, sizeof(reply)) > 0);
     break;
   }
+  case MT_CREATE_MOUSE: {
+    uint32_t id = input_new_mouse();
+    CreateKeyboardReply reply = {
+        .type = MT_CREATE_MOUSE_REPLY,
+        .id = id,
+    };
+    assert(write(fd, &reply, sizeof(reply)) > 0);
+    break;
+  }
   case MT_KEY_PRESS:
     input_key_press(message.key_press.id, message.key_press.key);
     break;
   case MT_KEY_RELEASE:
     input_key_release(message.key_press.id, message.key_press.key);
+    break;
+  case MT_BUTTON_PRESS:
+    input_button_press(message.key_press.id, message.key_press.key);
+    break;
+  case MT_BUTTON_RELEASE:
+    input_button_release(message.key_press.id, message.key_press.key);
+    break;
+  case MT_MOUSE_MOVE:
+    input_mouse_move(message.mouse_move.id, message.mouse_move.dx, message.mouse_move.dy);
+    break;
+  case MT_MOUSE_SCROLL:
+    input_mouse_scroll(message.mouse_move.id, message.mouse_move.dx, message.mouse_move.dy);
     break;
   case MT_REMOVE_DEVICE:
     input_remove_device(message.remove_device.id);

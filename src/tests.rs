@@ -33,6 +33,7 @@ mod delete_window;
 mod destroyed;
 mod device_added;
 mod device_key;
+mod device_mouse;
 mod focused;
 mod focused_multi_seat;
 mod icon;
@@ -54,6 +55,7 @@ mod urgency;
 mod user_event;
 mod visible;
 mod window_keyboard;
+mod window_mouse;
 
 use crate::backend::{BackendFlags, Instance};
 use std::future::Future;
@@ -101,5 +103,7 @@ pub fn tests() -> Vec<Box<dyn Test>> {
         Box::new(user_event::Test),
         Box::new(available_monitors::Test),
         Box::new(primary_monitor::Test),
+        Box::new(device_mouse::Test),
+        Box::new(window_mouse::Test),
     ]
 }

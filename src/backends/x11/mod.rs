@@ -1,14 +1,17 @@
 use crate::backend::{
-    Backend, BackendDeviceId, BackendFlags, BackendIcon, Device, EventLoop, Instance, Keyboard,
-    Mouse, PressedKey, Seat, Window, WindowProperties,
+    Backend, BackendDeviceId, BackendFlags, BackendIcon, Button, Device, EventLoop, Instance,
+    Keyboard, Mouse, PressedButton, PressedKey, Seat, Window, WindowProperties,
 };
 use crate::backends::x11::layout::{layouts, set_names, Layouts};
 use crate::backends::x11::wm::TITLE_HEIGHT;
 use crate::backends::x11::MessageType::{
+    MT_BUTTON_PRESS, MT_BUTTON_RELEASE, MT_CREATE_MOUSE, MT_CREATE_MOUSE_REPLY,
     MT_ENABLE_SECOND_MONITOR, MT_ENABLE_SECOND_MONITOR_REPLY, MT_GET_VIDEO_INFO,
-    MT_GET_VIDEO_INFO_REPLY, MT_REMOVE_DEVICE,
+    MT_GET_VIDEO_INFO_REPLY, MT_MOUSE_MOVE, MT_MOUSE_SCROLL, MT_REMOVE_DEVICE,
 };
-use crate::event::{map_event, Event, UserEvent};
+use crate::env::set_env;
+use crate::event::{map_event, DeviceEvent, DeviceEventExt, Event, UserEvent};
+use crate::eventstream::EventStream;
 use crate::keyboard::{Key, Layout};
 use parking_lot::Mutex;
 use std::any::Any;
@@ -27,8 +30,9 @@ use tokio::io::Interest;
 use tokio::task::JoinHandle;
 use uapi::c::{AF_UNIX, O_CLOEXEC, SOCK_CLOEXEC, SOCK_SEQPACKET};
 use uapi::{pipe2, socketpair, IntoUstr, OwnedFd, Pod, UapiReadExt, UstrPtr};
-use winit::event::DeviceId;
+use winit::event::{DeviceId, ElementState, RawKeyEvent};
 use winit::event_loop::{ControlFlow, EventLoop as WEventLoop};
+use winit::keyboard::KeyCode;
 use winit::platform::run_return::EventLoopExtRunReturn;
 use winit::platform::unix::{
     DeviceIdExtUnix, EventLoopExtUnix, EventLoopWindowTargetExtUnix, WindowExtUnix,
@@ -37,7 +41,6 @@ use winit::window::{Window as WWindow, WindowBuilder};
 use xcb_dl::{ffi, Xcb, XcbRandr, XcbRender, XcbXinput, XcbXkb};
 use xcb_dl_util::error::XcbErrorParser;
 use MessageType::{MT_CREATE_KEYBOARD, MT_CREATE_KEYBOARD_REPLY, MT_KEY_PRESS, MT_KEY_RELEASE};
-use crate::env::{set_env};
 
 mod evdev;
 mod keysyms;
@@ -270,19 +273,10 @@ impl Backend for Arc<XBackend> {
             core.unwrap()
         };
 
-        let root = unsafe {
-            let screen = *self
-                .xcb
-                .xcb_setup_roots_iterator(self.xcb.xcb_get_setup(c.c))
-                .data;
-            screen.root
-        };
-
         Box::new(Arc::new(XInstance {
             c,
             data: instance.clone(),
             event_loops: Default::default(),
-            root,
             wm,
             core_p,
             core_kb,
@@ -396,7 +390,6 @@ struct XInstance {
     c: XConnection,
     data: Arc<XInstanceData>,
     event_loops: Mutex<Vec<Weak<XEventLoopData>>>,
-    root: ffi::xcb_window_t,
     wm: Option<JoinHandle<()>>,
     core_p: ffi::xcb_input_device_id_t,
     core_kb: ffi::xcb_input_device_id_t,
@@ -416,6 +409,18 @@ impl XInstance {
         uapi::read(self.data.sock.raw(), &mut msg).unwrap();
         unsafe {
             assert_eq!(msg.ty, MT_CREATE_KEYBOARD_REPLY as _);
+            msg.create_keyboard_reply.id as _
+        }
+    }
+
+    fn add_mouse(&self) -> ffi::xcb_input_device_id_t {
+        let mut msg = Message {
+            ty: MT_CREATE_MOUSE as _,
+        };
+        uapi::write(self.data.sock.raw(), &msg).unwrap();
+        uapi::read(self.data.sock.raw(), &mut msg).unwrap();
+        unsafe {
+            assert_eq!(msg.ty, MT_CREATE_MOUSE_REPLY as _);
             msg.create_keyboard_reply.id as _
         }
     }
@@ -519,23 +524,8 @@ impl XInstance {
             }
         }
     }
-}
 
-impl Instance for Arc<XInstance> {
-    fn backend(&self) -> &dyn Backend {
-        &self.data.backend
-    }
-
-    fn default_seat(&self) -> Box<dyn Seat> {
-        Box::new(Arc::new(XSeat {
-            instance: self.clone(),
-            pointer: self.core_p,
-            keyboard: self.core_kb,
-            layout: self.core_layout.clone(),
-        }))
-    }
-
-    fn create_seat(&self) -> Box<dyn Seat> {
+    fn create_seat2(&self) -> (ffi::xcb_input_device_id_t, ffi::xcb_input_device_id_t) {
         unsafe {
             let xinput = &self.data.backend.xinput;
             let xcb = &self.data.backend.xcb;
@@ -593,16 +583,43 @@ impl Instance for Arc<XInstance> {
                 xinput.xcb_input_xi_device_info_next(&mut infos);
             };
             self.set_layout(kb_id, Layout::Qwerty, None);
-            Box::new(Arc::new(XSeat {
-                instance: self.clone(),
-                pointer: pointer_id,
-                keyboard: kb_id,
-                layout: Arc::new(Cell::new(Layout::Qwerty)),
-            }))
+            (pointer_id, kb_id)
         }
+    }
+}
+
+fn create_seat(instance: &Arc<XInstance>) -> Arc<XSeat> {
+    let (pointer_id, kb_id) = instance.create_seat2();
+    Arc::new(XSeat {
+        instance: instance.clone(),
+        pointer: pointer_id,
+        keyboard: kb_id,
+        layout: Arc::new(Cell::new(Layout::Qwerty)),
+    })
+}
+
+impl Instance for Arc<XInstance> {
+    fn backend(&self) -> &dyn Backend {
+        &self.data.backend
+    }
+
+    fn default_seat(&self) -> Box<dyn Seat> {
+        Box::new(Arc::new(XSeat {
+            instance: self.clone(),
+            pointer: self.core_p,
+            keyboard: self.core_kb,
+            layout: self.core_layout.clone(),
+        }))
+    }
+
+    fn create_seat(&self) -> Box<dyn Seat> {
+        Box::new(create_seat(self))
     }
 
     fn create_event_loop(&self) -> Box<dyn EventLoop> {
+        let barrier_seat = create_seat(self);
+        barrier_seat.un_focus();
+        let barrier_kb = add_keyboard(&barrier_seat);
         let el = {
             let _var = set_env("DISPLAY", &format!(":{}", self.data.display));
             WEventLoop::new_x11_any_thread().unwrap()
@@ -616,6 +633,7 @@ impl Instance for Arc<XInstance> {
             events: Default::default(),
             version: Cell::new(1),
             cached_num_monitors: Cell::new(usize::MAX),
+            barrier_kb,
         });
         let el2 = el.clone();
         let jh = tokio::task::spawn_local(async move {
@@ -792,6 +810,7 @@ struct XEventLoopData {
     events: Mutex<VecDeque<Event>>,
     version: Cell<u32>,
     cached_num_monitors: Cell<usize>,
+    barrier_kb: Arc<XKeyboard>,
 }
 
 impl XEventLoopData {
@@ -836,6 +855,22 @@ impl Drop for XEventLoop {
 }
 
 impl XEventLoop {
+    fn event2<'a>(&'a self) -> Pin<Box<dyn Future<Output = Event> + 'a>> {
+        struct Changed<'b>(&'b XEventLoopData);
+        impl<'b> Future for Changed<'b> {
+            type Output = Event;
+            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                if let Some(e) = self.0.events.lock().pop_front() {
+                    Poll::Ready(e)
+                } else {
+                    self.0.waiters.lock().push(cx.waker().clone());
+                    Poll::Pending
+                }
+            }
+        }
+        Box::pin(Changed(&self.data))
+    }
+
     fn get_window_format(&self, id: ffi::xcb_window_t) -> ffi::xcb_render_directformat_t {
         unsafe {
             let instance = &self.data.instance;
@@ -886,21 +921,15 @@ impl XEventLoop {
     }
 }
 
+impl EventStream for Arc<XEventLoop> {
+    fn event<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = Event> + 'a>> {
+        self.event2()
+    }
+}
+
 impl EventLoop for Arc<XEventLoop> {
-    fn event<'a>(&'a self) -> Pin<Box<dyn Future<Output = Event> + 'a>> {
-        struct Changed<'b>(&'b XEventLoopData);
-        impl<'b> Future for Changed<'b> {
-            type Output = Event;
-            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                if let Some(e) = self.0.events.lock().pop_front() {
-                    Poll::Ready(e)
-                } else {
-                    self.0.waiters.lock().push(cx.waker().clone());
-                    Poll::Pending
-                }
-            }
-        }
-        Box::pin(Changed(&self.data))
+    fn events(&self) -> Box<dyn EventStream> {
+        Box::new(self.clone())
     }
 
     fn changed<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
@@ -970,6 +999,26 @@ impl EventLoop for Arc<XEventLoop> {
 
     fn with_winit<'a>(&self, f: Box<dyn FnOnce(&mut WEventLoop<UserEvent>) + 'a>) {
         f(&mut *self.data.el.lock());
+    }
+
+    fn barrier<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
+        Box::pin(async {
+            self.data.barrier_kb.press(Key::KeyEsc);
+            loop {
+                let ev = self.event2().await;
+                if let Event::DeviceEvent(DeviceEventExt { device_id, event }) = ev {
+                    if device_id.xinput_id() == Some(self.data.barrier_kb.dev.id as u32) {
+                        if let DeviceEvent::Key(RawKeyEvent {
+                            physical_key: KeyCode::Escape,
+                            state: ElementState::Released,
+                        }) = event
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
+        })
     }
 }
 
@@ -1326,15 +1375,33 @@ impl XSeat {
     }
 }
 
+fn add_keyboard(seat: &Arc<XSeat>) -> Arc<XKeyboard> {
+    let id = seat.instance.add_keyboard();
+    log::info!("Created keyboard {} on seat {}", id, seat.keyboard);
+    seat.instance.assign_slave(id, seat.keyboard);
+    seat.instance.set_layout(id, seat.layout.get(), None);
+    seat.instance
+        .set_layout(seat.keyboard, seat.layout.get(), None);
+    Arc::new(XKeyboard {
+        pressed_keys: Default::default(),
+        dev: XDevice {
+            seat: seat.clone(),
+            id,
+        },
+    })
+}
+
 impl Seat for Arc<XSeat> {
     fn add_keyboard(&self) -> Box<dyn Keyboard> {
-        let id = self.instance.add_keyboard();
-        self.instance.assign_slave(id, self.keyboard);
-        self.instance.set_layout(id, self.layout.get(), None);
-        self.instance
-            .set_layout(self.keyboard, self.layout.get(), None);
-        Box::new(Arc::new(XKeyboard {
-            pressed_keys: Default::default(),
+        Box::new(add_keyboard(self))
+    }
+
+    fn add_mouse(&self) -> Box<dyn Mouse> {
+        let id = self.instance.add_mouse();
+        log::info!("Created mouse {} on seat {}", id, self.keyboard);
+        self.instance.assign_slave(id, self.pointer);
+        Box::new(Arc::new(XMouse {
+            pressed_buttons: Default::default(),
             dev: XDevice {
                 seat: self.clone(),
                 id,
@@ -1342,23 +1409,51 @@ impl Seat for Arc<XSeat> {
         }))
     }
 
-    fn add_mouse(&self) -> Box<dyn Mouse> {
-        todo!()
-    }
-
     fn focus(&self, window: &dyn Window) {
         let window: &Arc<XWindow> = window.any().downcast_ref().unwrap();
+        log::info!("Focusing seat {} on window {}", self.keyboard, window.id);
         self.focus2(window.id);
     }
 
     fn un_focus(&self) {
-        self.focus2(self.instance.root);
+        log::info!("Unfocusing seat {}", self.keyboard);
+        self.focus2(0);
     }
 
     fn set_layout(&self, layout: Layout) {
+        log::info!("Setting layout of seat {} to {:?}", self.keyboard, layout);
         self.instance
             .set_layout(self.keyboard, layout, Some(self.layout.get()));
         self.layout.set(layout);
+    }
+
+    fn position_cursor(&self, x: i32, y: i32) {
+        log::info!("Moving cursor of seat {} to {}x{}", self.keyboard, x, y);
+        let xinput = &self.instance.data.backend.xinput;
+        let xcb = &self.instance.data.backend.xcb;
+        let c = &self.instance.c;
+        unsafe {
+            let cookie = xinput.xcb_input_xi_warp_pointer_checked(
+                c.c,
+                0,
+                c.screen.root,
+                0,
+                0,
+                0,
+                0,
+                x << 16,
+                y << 16,
+                self.pointer,
+            );
+            if let Err(e) = c.errors.check_cookie(xcb, cookie) {
+                panic!("Could not warp pointer: {}", e);
+            }
+        }
+    }
+
+    fn is(&self, device_id: DeviceId) -> bool {
+        Some(self.pointer as u32) == device_id.xinput_id()
+            || Some(self.keyboard as u32) == device_id.xinput_id()
     }
 }
 
@@ -1422,6 +1517,86 @@ impl BackendDeviceId for XDeviceId {
     }
 }
 
+struct XMouse {
+    pressed_buttons: Mutex<HashMap<Button, Weak<XPressedButton>>>,
+    dev: XDevice,
+}
+
+impl Device for Arc<XMouse> {
+    fn id(&self) -> Box<dyn BackendDeviceId> {
+        Box::new(XDeviceId { id: self.dev.id })
+    }
+}
+
+impl Mouse for Arc<XMouse> {
+    fn press(&self, button: Button) -> Box<dyn PressedButton> {
+        log::info!(
+            "Pressing button {:?} of mouse {} of seat {}",
+            button,
+            self.dev.id,
+            self.dev.seat.keyboard
+        );
+        let mut buttons = self.pressed_buttons.lock();
+        if let Some(p) = buttons.get(&button) {
+            if let Some(p) = p.upgrade() {
+                return Box::new(p);
+            }
+        }
+        let msg = Message {
+            key_press: KeyPress {
+                ty: MT_BUTTON_PRESS as _,
+                id: self.dev.id as _,
+                key: map_button(button),
+            },
+        };
+        uapi::write(self.dev.seat.instance.data.sock.raw(), &msg).unwrap();
+        let p = Arc::new(XPressedButton {
+            mouse: self.clone(),
+            button,
+        });
+        buttons.insert(button, Arc::downgrade(&p));
+        Box::new(p)
+    }
+
+    fn move_(&self, dx: i32, dy: i32) {
+        log::info!(
+            "Moving mouse {} of seat {} by {}x{}",
+            self.dev.id,
+            self.dev.seat.keyboard,
+            dx,
+            dy
+        );
+        let msg = Message {
+            mouse_move: MouseMove {
+                ty: MT_MOUSE_MOVE as _,
+                id: self.dev.id as _,
+                dx,
+                dy,
+            },
+        };
+        uapi::write(self.dev.seat.instance.data.sock.raw(), &msg).unwrap();
+    }
+
+    fn scroll(&self, dx: i32, dy: i32) {
+        log::info!(
+            "Scrolling mouse {} of seat {} by {}x{}",
+            self.dev.id,
+            self.dev.seat.keyboard,
+            dx,
+            dy
+        );
+        let msg = Message {
+            mouse_move: MouseMove {
+                ty: MT_MOUSE_SCROLL as _,
+                id: self.dev.id as _,
+                dx,
+                dy: -dy,
+            },
+        };
+        uapi::write(self.dev.seat.instance.data.sock.raw(), &msg).unwrap();
+    }
+}
+
 struct XKeyboard {
     pressed_keys: Mutex<HashMap<Key, Weak<XPressedKey>>>,
     dev: XDevice,
@@ -1435,9 +1610,16 @@ impl Device for Arc<XKeyboard> {
 
 impl Keyboard for Arc<XKeyboard> {
     fn press(&self, key: Key) -> Box<dyn PressedKey> {
+        log::info!(
+            "Pressing key {:?} of keyboard {} of seat {}",
+            key,
+            self.dev.id,
+            self.dev.seat.keyboard
+        );
         let mut keys = self.pressed_keys.lock();
         if let Some(p) = keys.get(&key) {
             if let Some(p) = p.upgrade() {
+                log::info!("Key already pressed");
                 return Box::new(p);
             }
         }
@@ -1458,6 +1640,26 @@ impl Keyboard for Arc<XKeyboard> {
     }
 }
 
+struct XPressedButton {
+    mouse: Arc<XMouse>,
+    button: Button,
+}
+
+impl PressedButton for Arc<XPressedButton> {}
+
+impl Drop for XPressedButton {
+    fn drop(&mut self) {
+        let msg = Message {
+            key_press: KeyPress {
+                ty: MT_BUTTON_RELEASE as _,
+                id: self.mouse.dev.id as _,
+                key: map_button(self.button),
+            },
+        };
+        uapi::write(self.mouse.dev.seat.instance.data.sock.raw(), &msg).unwrap();
+    }
+}
+
 struct XPressedKey {
     kb: Arc<XKeyboard>,
     key: Key,
@@ -1467,6 +1669,7 @@ impl PressedKey for Arc<XPressedKey> {}
 
 impl Drop for XPressedKey {
     fn drop(&mut self) {
+        log::info!("Releasing key {:?}", self.key);
         let msg = Message {
             key_press: KeyPress {
                 ty: MT_KEY_RELEASE as _,
@@ -1475,6 +1678,16 @@ impl Drop for XPressedKey {
             },
         };
         uapi::write(self.kb.dev.seat.instance.data.sock.raw(), &msg).unwrap();
+    }
+}
+
+fn map_button(button: Button) -> u32 {
+    match button {
+        Button::Left => 1,
+        Button::Right => 2,
+        Button::Middle => 3,
+        Button::Back => 8,
+        Button::Forward => 9,
     }
 }
 
@@ -1508,6 +1721,12 @@ enum MessageType {
     MT_ENABLE_SECOND_MONITOR_REPLY,
     MT_GET_VIDEO_INFO,
     MT_GET_VIDEO_INFO_REPLY,
+    MT_CREATE_MOUSE,
+    MT_CREATE_MOUSE_REPLY,
+    MT_BUTTON_PRESS,
+    MT_BUTTON_RELEASE,
+    MT_MOUSE_MOVE,
+    MT_MOUSE_SCROLL,
 }
 
 #[repr(C)]
@@ -1519,6 +1738,7 @@ union Message {
     remove_device: RemoveDevice,
     enable_second_monitor: EnableSecondMonitor,
     get_video_info_reply: GetVideoInfoReply,
+    mouse_move: MouseMove,
 }
 
 unsafe impl Pod for Message {}
@@ -1554,6 +1774,15 @@ struct KeyPress {
     ty: u32,
     id: u32,
     key: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct MouseMove {
+    ty: u32,
+    id: u32,
+    dx: i32,
+    dy: i32,
 }
 
 #[repr(C)]

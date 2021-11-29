@@ -18,5 +18,5 @@ library(
 	dependencies: xorg,
 	install: true,
 	install_dir: meson.global_source_root() / 'install',
-	cpp_args: '-fvisibility=hidden',
+	c_args: '-fvisibility=hidden',
 )

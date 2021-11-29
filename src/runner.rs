@@ -32,8 +32,16 @@ pub fn run_tests(exec: &Execution, backend: &dyn Backend, tests: &[Box<dyn Test>
         run_test_outer(&be, backend, &**test, idx + 1, tests.len(), &num_failed)
     };
     if backend.flags().contains(BackendFlags::MT_SAFE) {
-        tests.par_iter().enumerate().filter(|(_, t)| !t.flags().contains(BackendFlags::SINGLE_THREADED)).for_each(rto);
-        tests.iter().enumerate().filter(|(_, t)| t.flags().contains(BackendFlags::SINGLE_THREADED)).for_each(rto);
+        tests
+            .par_iter()
+            .enumerate()
+            .filter(|(_, t)| !t.flags().contains(BackendFlags::SINGLE_THREADED))
+            .for_each(rto);
+        tests
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.flags().contains(BackendFlags::SINGLE_THREADED))
+            .for_each(rto);
     } else {
         tests.iter().enumerate().for_each(rto);
     }

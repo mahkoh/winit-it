@@ -5,7 +5,10 @@ use std::path::Path;
 
 mod backend;
 mod backends;
+mod env;
 mod event;
+mod eventstash;
+mod eventstream;
 mod keyboard;
 mod runner;
 #[allow(dead_code)]
@@ -13,7 +16,6 @@ mod screenshot;
 mod test;
 mod tests;
 mod tlog;
-mod env;
 
 fn main() {
     env::reset_env();

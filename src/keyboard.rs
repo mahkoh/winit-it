@@ -1,6 +1,6 @@
 /// Keys on the 104 key windows keyboard
 #[allow(dead_code)]
-#[derive(Copy, Clone, Hash, Eq, PartialEq)]
+#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
 pub enum Key {
     Key0,
     Key1,

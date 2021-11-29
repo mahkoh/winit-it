@@ -10,20 +10,21 @@ test!(
 
 async fn run(instance: &dyn Instance) {
     let el = instance.create_event_loop();
+    let mut events = el.events();
 
     let seat = instance.default_seat();
 
     let kb1 = seat.add_keyboard();
 
-    el.device_added_event().await;
+    events.device_added_event().await;
 
     kb1.press(Key::KeyR);
 
-    let (_, ke) = el.device_key_event().await;
+    let (_, ke) = events.device_key_event().await;
     assert_eq!(ke.physical_key, KeyCode::KeyR);
     assert_eq!(ke.state, ElementState::Pressed);
 
-    let (_, ke) = el.device_key_event().await;
+    let (_, ke) = events.device_key_event().await;
     assert_eq!(ke.physical_key, KeyCode::KeyR);
     assert_eq!(ke.state, ElementState::Released);
 
@@ -32,19 +33,19 @@ async fn run(instance: &dyn Instance) {
         kb1.press(Key::KeyL);
     }
 
-    let (_, ke) = el.device_key_event().await;
+    let (_, ke) = events.device_key_event().await;
     assert_eq!(ke.physical_key, KeyCode::KeyR);
     assert_eq!(ke.state, ElementState::Pressed);
 
-    let (_, ke) = el.device_key_event().await;
+    let (_, ke) = events.device_key_event().await;
     assert_eq!(ke.physical_key, KeyCode::KeyL);
     assert_eq!(ke.state, ElementState::Pressed);
 
-    let (_, ke) = el.device_key_event().await;
+    let (_, ke) = events.device_key_event().await;
     assert_eq!(ke.physical_key, KeyCode::KeyL);
     assert_eq!(ke.state, ElementState::Released);
 
-    let (_, ke) = el.device_key_event().await;
+    let (_, ke) = events.device_key_event().await;
     assert_eq!(ke.physical_key, KeyCode::KeyR);
     assert_eq!(ke.state, ElementState::Released);
 
@@ -52,11 +53,11 @@ async fn run(instance: &dyn Instance) {
 
     kb1.press(Key::KeyQ);
 
-    let (_, ke) = el.device_key_event().await;
+    let (_, ke) = events.device_key_event().await;
     assert_eq!(ke.physical_key, KeyCode::KeyQ);
     assert_eq!(ke.state, ElementState::Pressed);
 
-    let (_, ke) = el.device_key_event().await;
+    let (_, ke) = events.device_key_event().await;
     assert_eq!(ke.physical_key, KeyCode::KeyQ);
     assert_eq!(ke.state, ElementState::Released);
 }

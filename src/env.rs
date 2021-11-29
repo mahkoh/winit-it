@@ -1,5 +1,5 @@
-use std::ffi::OsString;
 use parking_lot::ReentrantMutex;
+use std::ffi::OsString;
 
 static ENV_LOCK: ReentrantMutex<()> = parking_lot::const_reentrant_mutex(());
 
@@ -27,13 +27,17 @@ impl<T> Drop for Reset<T> {
     fn drop(&mut self) {
         match &self.1 {
             Some(v) => {
-                log::info!("Reset environment variable {} to {}", self.0, v.to_string_lossy());
+                log::info!(
+                    "Reset environment variable {} to {}",
+                    self.0,
+                    v.to_string_lossy()
+                );
                 std::env::set_var(&self.0, v);
-            },
+            }
             _ => {
                 log::info!("Unsetting environment variable {}", self.0);
                 std::env::remove_var(&self.0);
-            },
+            }
         }
     }
 }

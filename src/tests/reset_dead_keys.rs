@@ -8,6 +8,7 @@ test!(run);
 
 async fn run(instance: &dyn Instance) {
     let el = instance.create_event_loop();
+    let mut events = el.events();
     let window = el.create_window(Default::default());
     window.mapped(true).await;
     let seat = instance.default_seat();
@@ -30,7 +31,7 @@ async fn run(instance: &dyn Instance) {
         // 2: Q pressed
         // 3: Q released
         for i in 0..4 {
-            let (_, ki) = el.window_keyboard_input().await;
+            let (_, ki) = events.window_keyboard_input().await;
             if matches!(i, 0 | 1) {
                 assert_eq!(ki.event.physical_key, KeyCode::BracketLeft);
                 assert_eq!(ki.event.logical_key, WKey::Dead(Some('^')));
@@ -93,7 +94,7 @@ async fn run(instance: &dyn Instance) {
         // 0: LeftBrace pressed
         // 1: LeftBrace released
         for i in 0..2 {
-            let (_, ki) = el.window_keyboard_input().await;
+            let (_, ki) = events.window_keyboard_input().await;
             assert_eq!(ki.event.physical_key, KeyCode::BracketLeft);
             assert_eq!(ki.event.logical_key, WKey::Dead(Some('^')));
             assert_eq!(ki.event.text, None);
@@ -124,7 +125,7 @@ async fn run(instance: &dyn Instance) {
         // 0: Q pressed
         // 1: Q released
         for i in 0..2 {
-            let (_, ki) = el.window_keyboard_input().await;
+            let (_, ki) = events.window_keyboard_input().await;
             assert_eq!(ki.event.physical_key, KeyCode::KeyQ);
             assert_eq!(ki.event.logical_key, WKey::Character("a"));
             if i == 0 {

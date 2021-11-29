@@ -1,15 +1,13 @@
-use crate::event::{
-    DeviceEvent, DeviceEventExt, Event, UserEvent, WindowEvent, WindowEventExt, WindowKeyboardInput,
-};
+use crate::event::UserEvent;
+use crate::eventstream::EventStream;
 use crate::keyboard::{Key, Layout};
 use std::any::Any;
 use std::fmt::Display;
 use std::future::Future;
 use std::pin::Pin;
-use winit::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
-use winit::event::{DeviceId, RawKeyEvent};
+use winit::dpi::{Position, Size};
+use winit::event::DeviceId;
 use winit::event_loop::EventLoop as WEventLoop;
-use winit::keyboard::ModifiersState;
 use winit::monitor::MonitorHandle;
 use winit::window::{Icon, UserAttentionType, Window as WWindow, WindowBuilder, WindowId};
 
@@ -65,10 +63,11 @@ pub trait Instance {
 }
 
 pub trait EventLoop {
-    fn event<'a>(&'a self) -> Pin<Box<dyn Future<Output = Event> + 'a>>;
+    fn events(&self) -> Box<dyn EventStream>;
     fn changed<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>>;
     fn create_window(&self, builder: WindowBuilder) -> Box<dyn Window>;
     fn with_winit<'a>(&self, f: Box<dyn FnOnce(&mut WEventLoop<UserEvent>) + 'a>);
+    fn barrier<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>>;
 }
 
 impl dyn EventLoop {
@@ -95,140 +94,6 @@ impl dyn EventLoop {
                 return;
             }
             self.changed().await;
-        }
-    }
-
-    pub async fn user_event(&self) -> UserEvent {
-        loop {
-            if let Event::UserEvent(ue) = self.event().await {
-                return ue;
-            }
-        }
-    }
-
-    pub async fn window_event(&self) -> WindowEventExt {
-        loop {
-            if let Event::WindowEvent(we) = self.event().await {
-                return we;
-            }
-        }
-    }
-
-    pub async fn device_event(&self) -> DeviceEventExt {
-        loop {
-            if let Event::DeviceEvent(we) = self.event().await {
-                return we;
-            }
-        }
-    }
-
-    pub async fn device_added_event(&self) -> DeviceEventExt {
-        log::info!("Waiting for device added event");
-        loop {
-            let de = self.device_event().await;
-            if de.event == DeviceEvent::Added {
-                return de;
-            }
-        }
-    }
-
-    pub async fn device_removed_event(&self) -> DeviceEventExt {
-        log::info!("Waiting for device removed event");
-        loop {
-            let de = self.device_event().await;
-            if de.event == DeviceEvent::Removed {
-                return de;
-            }
-        }
-    }
-
-    pub async fn device_key_event(&self) -> (DeviceEventExt, RawKeyEvent) {
-        log::info!("Waiting for device key event");
-        loop {
-            let de = self.device_event().await;
-            if let DeviceEvent::Key(e) = de.event {
-                log::debug!("Got key event {:?}", e);
-                return (de, e);
-            }
-        }
-    }
-
-    pub async fn window_destroyed_event(&self) -> WindowEventExt {
-        log::debug!("Awaiting window destroyed");
-        loop {
-            let we = self.window_event().await;
-            if let WindowEvent::Destroyed = &we.event {
-                log::debug!("Got window destroyed");
-                return we.clone();
-            };
-        }
-    }
-
-    pub async fn window_focus_event(&self) -> (WindowEventExt, bool) {
-        log::debug!("Awaiting window focus");
-        loop {
-            let we = self.window_event().await;
-            if let WindowEvent::Focused(v) = &we.event {
-                log::debug!("Got window focus {}", v);
-                return (we.clone(), *v);
-            };
-        }
-    }
-
-    pub async fn window_move_event(&self) -> (WindowEventExt, PhysicalPosition<i32>) {
-        log::debug!("Awaiting window move");
-        loop {
-            let we = self.window_event().await;
-            if let WindowEvent::Moved(pos) = &we.event {
-                log::debug!("Got window move");
-                return (we.clone(), pos.clone());
-            };
-        }
-    }
-
-    pub async fn window_resize_event(&self) -> (WindowEventExt, PhysicalSize<u32>) {
-        log::debug!("Awaiting window resize");
-        loop {
-            let we = self.window_event().await;
-            if let WindowEvent::Resized(pos) = &we.event {
-                log::debug!("Got window resize");
-                return (we.clone(), pos.clone());
-            };
-        }
-    }
-
-    pub async fn window_close_requested(&self) -> WindowEventExt {
-        log::debug!("Awaiting window delete");
-        loop {
-            let we = self.window_event().await;
-            if let WindowEvent::CloseRequested = &we.event {
-                log::debug!("Got close requested");
-                return we;
-            };
-        }
-    }
-
-    pub async fn window_keyboard_input(&self) -> (WindowEventExt, WindowKeyboardInput) {
-        log::debug!("Awaiting keyboard input");
-        loop {
-            let we = self.window_event().await;
-            if let WindowEvent::KeyboardInput(ki) = &we.event {
-                log::debug!("Got keyboard input {:?}", ki);
-                let ki = ki.clone();
-                return (we, ki);
-            }
-        }
-    }
-
-    pub async fn window_modifiers(&self) -> (WindowEventExt, ModifiersState) {
-        log::debug!("Awaiting window modifiers");
-        loop {
-            let we = self.window_event().await;
-            if let WindowEvent::ModifiersChanged(ki) = &we.event {
-                log::debug!("Got window modifiers {:?}", ki);
-                let ki = ki.clone();
-                return (we, ki);
-            }
         }
     }
 }
@@ -615,6 +480,8 @@ pub trait Seat {
     fn focus(&self, window: &dyn Window);
     fn un_focus(&self);
     fn set_layout(&self, layout: Layout);
+    fn position_cursor(&self, x: i32, y: i32);
+    fn is(&self, device_id: DeviceId) -> bool;
 }
 
 pub trait BackendDeviceId {
@@ -629,6 +496,21 @@ pub trait Keyboard: Device {
     fn press(&self, key: Key) -> Box<dyn PressedKey>;
 }
 
-pub trait Mouse: Device {}
+pub trait Mouse: Device {
+    fn press(&self, button: Button) -> Box<dyn PressedButton>;
+    fn move_(&self, dx: i32, dy: i32);
+    fn scroll(&self, dx: i32, dy: i32);
+}
 
 pub trait PressedKey {}
+
+pub trait PressedButton {}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Button {
+    Left,
+    Right,
+    Middle,
+    Forward,
+    Back,
+}

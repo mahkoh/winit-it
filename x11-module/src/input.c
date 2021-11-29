@@ -2,6 +2,8 @@
 #include <X11/Xdefs.h>
 #include <xf86Xinput.h>
 #include <stdint.h>
+#include <exevents.h>
+#include <xserver-properties.h>
 #include "winit.h"
 
 #define DRIVER_VERSION 1
@@ -17,10 +19,42 @@ typedef struct Device {
   struct Device **prev_next;
   Type type;
   InputInfoPtr device;
+  ValuatorMask *mask;
 } Device;
 
 static Device *devices;
 static Type current_type;
+
+static void ptr_control(DeviceIntPtr dev, PtrCtrl *ctrl) { }
+
+static void init_mouse(DeviceIntPtr dev, Device *device) {
+  Atom button_labels[] = {
+      XIGetKnownProperty(BTN_LABEL_PROP_BTN_LEFT),
+      XIGetKnownProperty(BTN_LABEL_PROP_BTN_RIGHT),
+      XIGetKnownProperty(BTN_LABEL_PROP_BTN_MIDDLE),
+      XIGetKnownProperty(BTN_LABEL_PROP_BTN_WHEEL_UP),
+      XIGetKnownProperty(BTN_LABEL_PROP_BTN_WHEEL_DOWN),
+      XIGetKnownProperty(BTN_LABEL_PROP_BTN_HWHEEL_LEFT),
+      XIGetKnownProperty(BTN_LABEL_PROP_BTN_HWHEEL_RIGHT),
+      XIGetKnownProperty(BTN_LABEL_PROP_BTN_SIDE),
+      XIGetKnownProperty(BTN_LABEL_PROP_BTN_EXTRA),
+  };
+  Atom valuator_labels[] = {
+      XIGetKnownProperty(AXIS_LABEL_PROP_REL_X),
+      XIGetKnownProperty(AXIS_LABEL_PROP_REL_Y),
+      XIGetKnownProperty(AXIS_LABEL_PROP_REL_HWHEEL),
+      XIGetKnownProperty(AXIS_LABEL_PROP_REL_WHEEL),
+  };
+  uint8_t button_map[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+  assert(InitPointerDeviceStruct(&dev->public, button_map, 9, button_labels, ptr_control, GetMotionHistorySize(), 4, valuator_labels));
+  xf86InitValuatorAxisStruct(dev, 0, valuator_labels[0], -1, -1, 0, 0, 0, Relative);
+  xf86InitValuatorAxisStruct(dev, 1, valuator_labels[1], -1, -1, 0, 0, 0, Relative);
+  SetScrollValuator(dev, 2, SCROLL_TYPE_HORIZONTAL, 120, 0);
+  SetScrollValuator(dev, 3, SCROLL_TYPE_VERTICAL, 120, 0);
+  assert(InitPointerAccelerationScheme(dev, PtrAccelNoOp));
+  device->mask = valuator_mask_new(4);
+  assert(device->mask);
+}
 
 static int device_control(DeviceIntPtr dev, int what) {
   InputInfoPtr pInfo = dev->public.devicePrivate;
@@ -33,6 +67,7 @@ static int device_control(DeviceIntPtr dev, int what) {
       assert(InitKeyboardDeviceStruct(dev, NULL, NULL, NULL));
       break;
     case TyMouse:
+      init_mouse(dev, device);
       break;
     }
   case DEVICE_ON:
@@ -77,6 +112,9 @@ static void un_init(InputDriverPtr drv, InputInfoPtr pInfo, int flags) {
   if (device->next) {
     device->next->prev_next = device->prev_next;
   }
+  if (device->mask) {
+    valuator_mask_free(&device->mask);
+  }
   free(device);
 }
 
@@ -111,6 +149,11 @@ uint32_t input_new_keyboard() {
   return input_new("keyboard");
 }
 
+uint32_t input_new_mouse() {
+  current_type = TyMouse;
+  return input_new("mouse");
+}
+
 #define MIN_KEYCODE 8
 
 static Device *get_device(uint32_t id) {
@@ -131,6 +174,12 @@ static Device *get_keyboard(uint32_t keyboard) {
   return device;
 }
 
+static Device *get_mouse(uint32_t mouse) {
+  Device *device = get_device(mouse);
+  assert(device->type == TyMouse);
+  return device;
+}
+
 void input_key_press(uint32_t keyboard, uint8_t key) {
   Device *device = get_keyboard(keyboard);
   xf86PostKeyboardEvent(device->device->dev, key + MIN_KEYCODE, 1);
@@ -139,6 +188,37 @@ void input_key_press(uint32_t keyboard, uint8_t key) {
 void input_key_release(uint32_t keyboard, uint8_t key) {
   Device *device = get_keyboard(keyboard);
   xf86PostKeyboardEvent(device->device->dev, key + MIN_KEYCODE, 0);
+}
+
+void input_button_press(uint32_t mouse, uint8_t button) {
+  Device *device = get_mouse(mouse);
+  xf86PostButtonEvent(device->device->dev, Relative, button, 1, 0, 0);
+}
+
+void input_button_release(uint32_t mouse, uint8_t button) {
+  Device *device = get_mouse(mouse);
+  xf86PostButtonEvent(device->device->dev, Relative, button, 0, 0, 0);
+}
+
+void input_mouse_move(uint32_t mouse, int32_t dx, int32_t dy) {
+  Device *device = get_mouse(mouse);
+  valuator_mask_zero(device->mask);
+  ErrorF("%d %d\n", dx, dy);
+  valuator_mask_set_unaccelerated(device->mask, 0, dx, dx);
+  valuator_mask_set_unaccelerated(device->mask, 1, dy, dy);
+  xf86PostMotionEventM(device->device->dev, Relative, device->mask);
+}
+
+void input_mouse_scroll(uint32_t mouse, int32_t dx, int32_t dy) {
+  Device *device = get_mouse(mouse);
+  valuator_mask_zero(device->mask);
+  if (dx) {
+    valuator_mask_set(device->mask, 2, dx * 120);
+  }
+  if (dy) {
+    valuator_mask_set(device->mask, 3, dy * 120);
+  }
+  xf86PostMotionEventM(device->device->dev, Relative, device->mask);
 }
 
 void input_remove_device(uint32_t id) {

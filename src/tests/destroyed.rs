@@ -4,6 +4,7 @@ test!(run);
 
 async fn run(instance: &dyn Instance) {
     let el = instance.create_event_loop();
+    let mut events = el.events();
 
     let id = {
         let window = el.create_window(Default::default());
@@ -11,6 +12,6 @@ async fn run(instance: &dyn Instance) {
         window.winit_id()
     };
 
-    let we = el.window_destroyed_event().await;
+    let we = events.window_destroyed_event().await;
     assert_eq!(we.window_id, id);
 }

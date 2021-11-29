@@ -10,6 +10,7 @@ test!(run);
 
 async fn run(instance: &dyn Instance) {
     let el = instance.create_event_loop();
+    let mut events = el.events();
     let window = el.create_window(Default::default());
     window.mapped(true).await;
     let seat = instance.default_seat();
@@ -22,7 +23,7 @@ async fn run(instance: &dyn Instance) {
         // L Release
         kb.press(KeyL);
         for i in 0..2 {
-            let (_, ki) = el.window_keyboard_input().await;
+            let (_, ki) = events.window_keyboard_input().await;
             assert_eq!(ki.event.physical_key, KeyCode::KeyL);
             assert_eq!(ki.event.logical_key, WKey::Character("l"));
             assert_eq!(ki.event.location, KeyLocation::Standard);
@@ -73,14 +74,14 @@ async fn run(instance: &dyn Instance) {
         // 5: Modifiers changed
         for i in 0..6 {
             if i == 1 || i == 5 {
-                let (_, mo) = el.window_modifiers().await;
+                let (_, mo) = events.window_modifiers().await;
                 if i == 1 {
                     assert_eq!(mo, ModifiersState::SHIFT);
                 } else {
                     assert_eq!(mo, ModifiersState::empty());
                 }
             } else {
-                let (_, ki) = el.window_keyboard_input().await;
+                let (_, ki) = events.window_keyboard_input().await;
                 assert_eq!(ki.event.repeat, false);
                 if i == 0 || i == 4 {
                     assert_eq!(ki.event.physical_key, KeyCode::ShiftLeft);
@@ -151,14 +152,14 @@ async fn run(instance: &dyn Instance) {
         // 5: L released
         for i in 0..6 {
             if i == 1 || i == 4 {
-                let (_, mo) = el.window_modifiers().await;
+                let (_, mo) = events.window_modifiers().await;
                 if i == 1 {
                     assert_eq!(mo, ModifiersState::SHIFT);
                 } else {
                     assert_eq!(mo, ModifiersState::empty());
                 }
             } else {
-                let (_, ki) = el.window_keyboard_input().await;
+                let (_, ki) = events.window_keyboard_input().await;
                 assert_eq!(ki.event.repeat, false);
                 if i == 0 || i == 3 {
                     assert_eq!(ki.event.physical_key, KeyCode::ShiftLeft);
@@ -226,14 +227,14 @@ async fn run(instance: &dyn Instance) {
         // 5: Modifiers changed
         for i in 0..6 {
             if i == 1 || i == 5 {
-                let (_, mo) = el.window_modifiers().await;
+                let (_, mo) = events.window_modifiers().await;
                 if i == 1 {
                     assert_eq!(mo, ModifiersState::CONTROL);
                 } else {
                     assert_eq!(mo, ModifiersState::empty());
                 }
             } else {
-                let (_, ki) = el.window_keyboard_input().await;
+                let (_, ki) = events.window_keyboard_input().await;
                 assert_eq!(ki.event.repeat, false);
                 if i == 0 || i == 4 {
                     assert_eq!(ki.event.physical_key, KeyCode::ControlRight);
@@ -310,7 +311,7 @@ async fn run(instance: &dyn Instance) {
         // 9: Modifiers changed
         for i in 0..10 {
             if matches!(i, 1 | 3 | 7 | 9) {
-                let (_, mo) = el.window_modifiers().await;
+                let (_, mo) = events.window_modifiers().await;
                 match i {
                     1 => assert_eq!(mo, ModifiersState::CONTROL),
                     3 => assert_eq!(mo, ModifiersState::CONTROL | ModifiersState::SHIFT),
@@ -319,7 +320,7 @@ async fn run(instance: &dyn Instance) {
                     _ => unreachable!(),
                 }
             } else {
-                let (_, ki) = el.window_keyboard_input().await;
+                let (_, ki) = events.window_keyboard_input().await;
                 assert_eq!(ki.event.repeat, false);
                 if matches!(i, 0 | 6) {
                     assert_eq!(ki.event.physical_key, KeyCode::ControlRight);
@@ -397,14 +398,14 @@ async fn run(instance: &dyn Instance) {
         // 3: Modifiers changed
         for i in 0..4 {
             if i == 1 || i == 3 {
-                let (_, mo) = el.window_modifiers().await;
+                let (_, mo) = events.window_modifiers().await;
                 if i == 1 {
                     assert_eq!(mo, ModifiersState::ALT);
                 } else {
                     assert_eq!(mo, ModifiersState::empty());
                 }
             } else {
-                let (_, ki) = el.window_keyboard_input().await;
+                let (_, ki) = events.window_keyboard_input().await;
                 assert_eq!(ki.event.repeat, false);
                 assert_eq!(ki.event.physical_key, KeyCode::AltRight);
                 assert_eq!(ki.event.logical_key, WKey::Alt);
@@ -452,7 +453,7 @@ async fn run(instance: &dyn Instance) {
         // 9: Modifiers changed
         for i in 0..10 {
             if matches!(i, 1 | 3 | 7 | 9) {
-                let (_, mo) = el.window_modifiers().await;
+                let (_, mo) = events.window_modifiers().await;
                 match i {
                     1 => assert_eq!(mo, ModifiersState::CONTROL),
                     3 => assert_eq!(mo, ModifiersState::CONTROL | ModifiersState::SHIFT),
@@ -461,7 +462,7 @@ async fn run(instance: &dyn Instance) {
                     _ => unreachable!(),
                 }
             } else {
-                let (_, ki) = el.window_keyboard_input().await;
+                let (_, ki) = events.window_keyboard_input().await;
                 assert_eq!(ki.event.repeat, false);
                 if matches!(i, 0 | 6) {
                     assert_eq!(ki.event.physical_key, KeyCode::ControlRight);
@@ -539,7 +540,7 @@ async fn run(instance: &dyn Instance) {
         // 0: Q pressed
         // 1: Q released
         for i in 0..2 {
-            let (_, ki) = el.window_keyboard_input().await;
+            let (_, ki) = events.window_keyboard_input().await;
             assert_eq!(ki.event.physical_key, KeyCode::KeyQ);
             assert_eq!(ki.event.logical_key, WKey::Character("a"));
             if i == 0 {
@@ -588,7 +589,7 @@ async fn run(instance: &dyn Instance) {
         // 2: Q pressed
         // 3: Q released
         for i in 0..4 {
-            let (_, ki) = el.window_keyboard_input().await;
+            let (_, ki) = events.window_keyboard_input().await;
             if matches!(i, 0 | 1) {
                 assert_eq!(ki.event.physical_key, KeyCode::BracketLeft);
                 assert_eq!(ki.event.logical_key, WKey::Dead(Some('^')));
@@ -668,14 +669,14 @@ async fn run(instance: &dyn Instance) {
         // 7: ModifiersChanged
         for i in 0..8 {
             if matches!(i, 3 | 7) {
-                let (_, mc) = el.window_modifiers().await;
+                let (_, mc) = events.window_modifiers().await;
                 if i == 3 {
                     assert_eq!(mc, ModifiersState::SHIFT);
                 } else {
                     assert_eq!(mc, ModifiersState::empty());
                 }
             } else {
-                let (_, ki) = el.window_keyboard_input().await;
+                let (_, ki) = events.window_keyboard_input().await;
                 if matches!(i, 0 | 1) {
                     assert_eq!(ki.event.physical_key, KeyCode::BracketLeft);
                     assert_eq!(ki.event.logical_key, WKey::Dead(Some('^')));
@@ -764,14 +765,14 @@ async fn run(instance: &dyn Instance) {
         // 7: ModifiersChanged
         for i in 0..8 {
             if matches!(i, 1 | 7) {
-                let (_, mc) = el.window_modifiers().await;
+                let (_, mc) = events.window_modifiers().await;
                 if i == 1 {
                     assert_eq!(mc, ModifiersState::CONTROL);
                 } else {
                     assert_eq!(mc, ModifiersState::empty());
                 }
             } else {
-                let (_, ki) = el.window_keyboard_input().await;
+                let (_, ki) = events.window_keyboard_input().await;
                 if matches!(i, 2 | 3) {
                     assert_eq!(ki.event.physical_key, KeyCode::BracketLeft);
                     assert_eq!(ki.event.logical_key, WKey::Dead(Some('^')));
@@ -861,7 +862,7 @@ async fn run(instance: &dyn Instance) {
         // 4: Esc pressed
         // 5: Esc released
         for i in 0..6 {
-            let (_, ki) = el.window_keyboard_input().await;
+            let (_, ki) = events.window_keyboard_input().await;
             if matches!(i, 0 | 1 | 4 | 5) {
                 assert_eq!(ki.event.physical_key, KeyCode::Escape);
                 assert_eq!(ki.event.logical_key, WKey::CapsLock);
@@ -932,14 +933,14 @@ async fn run(instance: &dyn Instance) {
         // 5: ModifiersChanged
         for i in 0..6 {
             if matches!(i, 1 | 5) {
-                let (_, mc) = el.window_modifiers().await;
+                let (_, mc) = events.window_modifiers().await;
                 if i == 1 {
                     assert_eq!(mc, ModifiersState::SHIFT);
                 } else {
                     assert_eq!(mc, ModifiersState::empty());
                 }
             } else {
-                let (_, ki) = el.window_keyboard_input().await;
+                let (_, ki) = events.window_keyboard_input().await;
                 if matches!(i, 0 | 4) {
                     // assert_eq!(ki.event.physical_key, KeyCode::ShiftRight);
                     assert_eq!(ki.event.physical_key, KeyCode::ShiftLeft);

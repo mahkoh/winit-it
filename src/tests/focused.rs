@@ -4,6 +4,7 @@ test!(run);
 
 async fn run(instance: &dyn Instance) {
     let el = instance.create_event_loop();
+    let mut events = el.events();
 
     let seat = instance.default_seat();
 
@@ -12,19 +13,19 @@ async fn run(instance: &dyn Instance) {
 
     seat.focus(&*window);
 
-    let (we, focus) = el.window_focus_event().await;
+    let (we, focus) = events.window_focus_event().await;
     assert_eq!(we.window_id, window.winit_id());
     assert!(focus);
 
     seat.un_focus();
 
-    let (we, focus) = el.window_focus_event().await;
+    let (we, focus) = events.window_focus_event().await;
     assert_eq!(we.window_id, window.winit_id());
     assert!(!focus);
 
     seat.focus(&*window);
 
-    let (we, focus) = el.window_focus_event().await;
+    let (we, focus) = events.window_focus_event().await;
     assert_eq!(we.window_id, window.winit_id());
     assert!(focus);
 
@@ -33,17 +34,17 @@ async fn run(instance: &dyn Instance) {
 
     seat.focus(&*window2);
 
-    let (we, focus) = el.window_focus_event().await;
+    let (we, focus) = events.window_focus_event().await;
     assert_eq!(we.window_id, window.winit_id());
     assert!(!focus);
 
-    let (we, focus) = el.window_focus_event().await;
+    let (we, focus) = events.window_focus_event().await;
     assert_eq!(we.window_id, window2.winit_id());
     assert!(focus);
 
     seat.un_focus();
 
-    let (we, focus) = el.window_focus_event().await;
+    let (we, focus) = events.window_focus_event().await;
     assert_eq!(we.window_id, window2.winit_id());
     assert!(!focus);
 }

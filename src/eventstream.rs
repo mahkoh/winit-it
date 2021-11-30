@@ -4,6 +4,7 @@ use crate::event::{
     WindowEventExt, WindowKeyboardInput, WindowMouseInput, WindowMouseWheel,
 };
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::RawKeyEvent;
@@ -112,6 +113,39 @@ impl<'a> dyn EventStream + 'a {
             if let WindowEvent::Destroyed = &we.event {
                 log::debug!("Got window destroyed");
                 return we.clone();
+            };
+        }
+    }
+
+    pub async fn window_hovered_file(&mut self) -> (WindowEventExt, PathBuf) {
+        log::debug!("Awaiting hovered file");
+        loop {
+            let we = self.window_event().await;
+            if let WindowEvent::HoveredFile(mi) = &we.event {
+                log::debug!("Got hovered file: {:?}", mi);
+                return (we.clone(), mi.clone());
+            };
+        }
+    }
+
+    pub async fn window_hovered_file_canceled(&mut self) -> WindowEventExt {
+        log::debug!("Awaiting hovered file cancelled");
+        loop {
+            let we = self.window_event().await;
+            if let WindowEvent::HoveredFileCancelled = &we.event {
+                log::debug!("Got hovered file cancelled");
+                return we.clone();
+            };
+        }
+    }
+
+    pub async fn window_dropped_file(&mut self) -> (WindowEventExt, PathBuf) {
+        log::debug!("Awaiting dropped file");
+        loop {
+            let we = self.window_event().await;
+            if let WindowEvent::DroppedFile(wi) = &we.event {
+                log::debug!("Got dropped file: {:?}", wi);
+                return (we.clone(), wi.clone());
             };
         }
     }

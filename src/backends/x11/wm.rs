@@ -3,7 +3,7 @@ use crate::backend::BackendIcon;
 use crate::backends::x11::{Protocols, WindowState, XConnection, XWindow};
 use std::future::Future;
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tokio::io::unix::AsyncFd;
 use tokio::io::Interest;
 use xcb_dl::ffi;
@@ -33,7 +33,9 @@ pub(super) fn run(instance: Arc<XInstanceData>) -> impl Future<Output = ()> {
         }
         let events = ffi::XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT
             | ffi::XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY
-            | ffi::XCB_EVENT_MASK_PROPERTY_CHANGE;
+            | ffi::XCB_EVENT_MASK_PROPERTY_CHANGE
+            | ffi::XCB_EVENT_MASK_BUTTON_RELEASE
+            | ffi::XCB_EVENT_MASK_POINTER_MOTION;
         let cookie = xcb.xcb_change_window_attributes_checked(
             c.c,
             c.screen.root,
@@ -130,6 +132,7 @@ pub(super) fn run(instance: Arc<XInstanceData>) -> impl Future<Output = ()> {
             instance,
             window_id,
             first_randr_event,
+            moving: None,
         };
 
         wm.run()
@@ -141,6 +144,15 @@ struct Wm {
     instance: Arc<XInstanceData>,
     window_id: ffi::xcb_window_t,
     first_randr_event: u8,
+    moving: Option<Moving>,
+}
+
+struct Moving {
+    win: Weak<XWindow>,
+    start_pointer_x: i32,
+    start_pointer_y: i32,
+    start_window_x: i32,
+    start_window_y: i32,
 }
 
 impl Drop for Wm {
@@ -197,6 +209,8 @@ impl Wm {
             ffi::XCB_REPARENT_NOTIFY => self.handle_reparent_notify(event),
             ffi::XCB_CLIENT_MESSAGE => self.handle_client_message(event),
             ffi::XCB_CONFIGURE_NOTIFY => self.handle_configure_notify(event),
+            ffi::XCB_MOTION_NOTIFY => self.handle_motion_notify(event),
+            ffi::XCB_BUTTON_RELEASE => self.handle_button_release(event),
             ffi::XCB_MAPPING_NOTIFY => {}
             n if n == self.first_randr_event + ffi::XCB_RANDR_SCREEN_CHANGE_NOTIFY => {
                 self.handle_randr_screen_change_notify(event);
@@ -454,21 +468,6 @@ impl Wm {
             }
         };
         win.urgency.set(res.flags.contains(XcbHintsFlags::URGENCY));
-        loop {
-            if res.flags.contains(XcbHintsFlags::STATE) {
-                let state = match res.initial_state {
-                    0 => WindowState::Withdrawn,
-                    1 => WindowState::Normal,
-                    3 => WindowState::Iconic,
-                    _ => {
-                        log::info!("Unknown initial state {}", res.initial_state);
-                        break;
-                    }
-                };
-                win.initial_state.set(state);
-            }
-            break;
-        }
         log::info!("Hints updated for {}: {:?}", win.id, res);
         win.upgade();
         data.changed();
@@ -704,6 +703,65 @@ impl Wm {
         data.changed();
     }
 
+    fn handle_motion_notify(&mut self, event: &ffi::xcb_generic_event_t) {
+        let event = unsafe { &*(event as *const _ as *const ffi::xcb_motion_notify_event_t) };
+        log::info!("Got motion event: {:?}", event);
+        let moving = match &self.moving {
+            Some(win) => win,
+            _ => return,
+        };
+        let win = match moving.win.upgrade() {
+            Some(win) => win,
+            _ => return,
+        };
+        unsafe {
+            let list = ffi::xcb_configure_window_value_list_t {
+                x: (event.root_x as i32 - moving.start_pointer_x) + moving.start_window_x,
+                y: (event.root_y as i32 - moving.start_pointer_y) + moving.start_window_y,
+                ..Default::default()
+            };
+            let xcb = &self.instance.backend.xcb;
+            let cookie = xcb.xcb_configure_window_aux_checked(
+                self.c.c,
+                win.parent_id.get(),
+                (ffi::XCB_CONFIG_WINDOW_X | ffi::XCB_CONFIG_WINDOW_Y) as _,
+                &list,
+            );
+            let error = self.c.errors.check_cookie(xcb, cookie);
+            if let Err(e) = error {
+                log::warn!("Could not drag parent window: {}", e);
+            }
+        }
+    }
+
+    fn handle_button_release(&mut self, event: &ffi::xcb_generic_event_t) {
+        let event = unsafe { &*(event as *const _ as *const ffi::xcb_button_release_event_t) };
+        log::info!("Got button release event: {:?}", event);
+        if event.detail != 1 {
+            return;
+        }
+        let mut data = self.instance.wm_data.lock();
+        let moving = match self.moving.take() {
+            Some(win) => win,
+            _ => return,
+        };
+        let win = match moving.win.upgrade() {
+            Some(win) => win,
+            _ => return,
+        };
+        win.dragging.set(false);
+        win.upgade();
+        data.changed();
+        unsafe {
+            let xcb = &self.instance.backend.xcb;
+            let cookie = xcb.xcb_ungrab_pointer_checked(self.c.c, 0);
+            let error = self.c.errors.check_cookie(xcb, cookie);
+            if let Err(e) = error {
+                log::warn!("Could not ungrab pointer: {}", e);
+            }
+        }
+    }
+
     fn handle_configure_notify(&mut self, event: &ffi::xcb_generic_event_t) {
         let event = unsafe { &*(event as *const _ as *const ffi::xcb_configure_notify_event_t) };
         let mut data = self.instance.wm_data.lock();
@@ -874,6 +932,63 @@ impl Wm {
             win.upgade();
             data.changed();
         }
+    }
+
+    fn handle_net_wm_moveresize(&mut self, event: &ffi::xcb_client_message_event_t) {
+        let mut data = self.instance.wm_data.lock();
+        let data32 = unsafe { event.data.data32 };
+        let win = match data.window(event.window) {
+            Some(w) => w,
+            _ => return,
+        };
+        let x_root = data32[0];
+        let y_root = data32[1];
+        let direction = data32[2];
+        if direction != 8 {
+            return;
+        }
+        unsafe {
+            let xcb = &self.instance.backend.xcb;
+            let mut err = ptr::null_mut();
+            let reply = xcb.xcb_grab_pointer_reply(
+                self.c.c,
+                xcb.xcb_grab_pointer(
+                    self.c.c,
+                    0,
+                    self.c.screen.root,
+                    (ffi::XCB_EVENT_MASK_BUTTON_RELEASE | ffi::XCB_EVENT_MASK_POINTER_MOTION) as _,
+                    1,
+                    1,
+                    0,
+                    0,
+                    0,
+                ),
+                &mut err,
+            );
+            let reply = match self.c.errors.check(xcb, reply, err) {
+                Ok(r) => r,
+                Err(e) => {
+                    log::warn!("Could not grab the pointer: {}", e);
+                    return;
+                }
+            };
+            if reply.status != 0 {
+                log::warn!("Could not grab the pointer: status: {}", reply.status);
+                return;
+            }
+            log::info!("Grabbed pointer");
+        }
+        win.dragging.set(true);
+        win.upgade();
+        data.changed();
+        assert!(self.moving.is_none());
+        self.moving = Some(Moving {
+            start_pointer_x: x_root as i32,
+            start_pointer_y: y_root as i32,
+            start_window_x: win.x.get(),
+            start_window_y: win.y.get(),
+            win: Arc::downgrade(&win),
+        });
     }
 
     fn handle_wm_change_state(&mut self, event: &ffi::xcb_client_message_event_t) {
@@ -1057,6 +1172,9 @@ impl Wm {
         // } else if event.type_ == self.instance.atoms.net_active_window && event.format == 32 {
         //     log::warn!("NET_ACTIVE_WINDOW client message: {:?}", event);
         //     self.handle_net_active_window(event);
+        } else if event.type_ == self.instance.atoms.net_wm_moveresize && event.format == 32 {
+            log::warn!("NET_WM_MOVERESIZE client message: {:?}", event);
+            self.handle_net_wm_moveresize(event);
         } else if event.type_ == self.instance.atoms.wm_change_state && event.format == 32 {
             log::warn!("WM_CHANGE_STATE client message: {:?}", event);
             self.handle_wm_change_state(event);

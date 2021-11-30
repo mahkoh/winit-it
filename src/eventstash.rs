@@ -1,8 +1,8 @@
 use crate::event::Event;
+use crate::eventstream::EventStream;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
-use crate::eventstream::EventStream;
 
 #[derive(Default)]
 pub struct EventStash {
@@ -14,7 +14,7 @@ struct Consume<'a> {
 }
 
 impl<'a> EventStream for Consume<'a> {
-    fn event<'b>(&'b mut self) -> Pin<Box<dyn Future<Output=Event> + 'b>> {
+    fn event<'b>(&'b mut self) -> Pin<Box<dyn Future<Output = Event> + 'b>> {
         if let Some(event) = self.events.pop_front() {
             Box::pin(std::future::ready(event))
         } else {
@@ -33,7 +33,7 @@ struct Stash<'a> {
 }
 
 impl<'a> EventStream for Stash<'a> {
-    fn event<'d>(&'d mut self) -> Pin<Box<dyn Future<Output=Event> + 'd>> {
+    fn event<'d>(&'d mut self) -> Pin<Box<dyn Future<Output = Event> + 'd>> {
         Box::pin(async {
             let event = self.el.event().await;
             self.events.push_back(event.clone());
@@ -50,13 +50,13 @@ impl EventStash {
     pub fn stash<'a>(&'a mut self, el: &'a mut dyn EventStream) -> Box<dyn EventStream + 'a> {
         Box::new(Stash {
             events: &mut self.events,
-            el
+            el,
         })
     }
 
     pub fn consume<'a>(&'a mut self) -> Box<dyn EventStream + 'a> {
         Box::new(Consume {
-            events: &mut self.events
+            events: &mut self.events,
         })
     }
 }

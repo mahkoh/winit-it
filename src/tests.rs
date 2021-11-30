@@ -34,6 +34,8 @@ mod destroyed;
 mod device_added;
 mod device_key;
 mod device_mouse;
+mod dnd;
+mod drag_window;
 mod focused;
 mod focused_multi_seat;
 mod icon;
@@ -105,5 +107,7 @@ pub fn tests() -> Vec<Box<dyn Test>> {
         Box::new(primary_monitor::Test),
         Box::new(device_mouse::Test),
         Box::new(window_mouse::Test),
+        Box::new(drag_window::Test),
+        Box::new(dnd::Test),
     ]
 }

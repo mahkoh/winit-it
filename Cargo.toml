@@ -10,7 +10,7 @@ log = "0.4.14"
 libc = "0.2.105"
 uapi = "0.2.2"
 simple_logger = "1.13.0"
-tokio = { version = "1.13.0", features = ["rt", "time", "io-std", "net", "macros"] }
+tokio = { version = "1.13.0", features = ["rt", "time", "io-std", "net", "macros", "sync"] }
 parking_lot = "0.11.2"
 futures = "0.3.17"
 xcb-dl = "0.2.0"

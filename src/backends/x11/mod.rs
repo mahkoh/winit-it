@@ -1,6 +1,6 @@
 use crate::backend::{
-    Backend, BackendDeviceId, BackendFlags, BackendIcon, Button, Device, EventLoop, Instance,
-    Keyboard, Mouse, PressedButton, PressedKey, Seat, Window, WindowProperties,
+    Backend, BackendDeviceId, BackendFlags, BackendIcon, Button, Device, DndProcess, EventLoop,
+    Instance, Keyboard, Mouse, PressedButton, PressedKey, Seat, Window, WindowProperties,
 };
 use crate::backends::x11::layout::{layouts, set_names, Layouts};
 use crate::backends::x11::wm::TITLE_HEIGHT;
@@ -25,8 +25,11 @@ use std::process::Command;
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Waker};
 use std::{mem, ptr};
+use std::fs::File;
+use std::path::{Path, PathBuf};
 use tokio::io::unix::AsyncFd;
 use tokio::io::Interest;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use uapi::c::{AF_UNIX, O_CLOEXEC, SOCK_CLOEXEC, SOCK_SEQPACKET};
 use uapi::{pipe2, socketpair, IntoUstr, OwnedFd, Pod, UapiReadExt, UstrPtr};
@@ -41,7 +44,10 @@ use winit::window::{Window as WWindow, WindowBuilder};
 use xcb_dl::{ffi, Xcb, XcbRandr, XcbRender, XcbXinput, XcbXkb};
 use xcb_dl_util::error::XcbErrorParser;
 use MessageType::{MT_CREATE_KEYBOARD, MT_CREATE_KEYBOARD_REPLY, MT_KEY_PRESS, MT_KEY_RELEASE};
+use crate::backends::x11::dnd::DndMsg;
+use crate::test::with_test_data;
 
+mod dnd;
 mod evdev;
 mod keysyms;
 mod layout;
@@ -227,6 +233,18 @@ impl Backend for Arc<XBackend> {
         instance.atoms.net_client_list_stacking = c.atom("_NET_CLIENT_LIST_STACKING");
         instance.atoms.net_frame_extents = c.atom("_NET_FRAME_EXTENTS");
         instance.atoms.net_supporting_wm_check = c.atom("_NET_SUPPORTING_WM_CHECK");
+        instance.atoms.net_wm_moveresize = c.atom("_NET_WM_MOVERESIZE");
+        instance.atoms.x_dnd_aware = c.atom("XdndAware");
+        instance.atoms.x_dnd_selection = c.atom("XdndSelection");
+        instance.atoms.x_dnd_enter = c.atom("XdndEnter");
+        instance.atoms.x_dnd_type_list = c.atom("XdndTypeList");
+        instance.atoms.x_dnd_position = c.atom("XdndPosition");
+        instance.atoms.x_dnd_action_copy = c.atom("XdndActionCopy");
+        instance.atoms.x_dnd_action_private = c.atom("XdndActionPrivate");
+        instance.atoms.x_dnd_status = c.atom("XdndStatus");
+        instance.atoms.x_dnd_leave = c.atom("XdndLeave");
+        instance.atoms.x_dnd_drop = c.atom("XdndDrop");
+        instance.atoms.uri_list = c.atom("text/uri-list");
 
         let instance = Arc::new(instance);
 
@@ -549,7 +567,6 @@ impl XInstance {
                 name: [0; 16],
             };
             write!(&mut change.name[..], "{}", name).unwrap();
-            log::info!("{:?}", change);
             let cookie =
                 xinput.xcb_input_xi_change_hierarchy_checked(self.c.c, 1, &change as *const _ as _);
             if let Err(e) = self.c.errors.check_cookie(xcb, cookie) {
@@ -755,6 +772,56 @@ impl Instance for Arc<XInstance> {
             );
             self.c.errors.check_cookie(xcb, cookie).unwrap();
         }
+    }
+
+    fn start_dnd_process(&self, path: &Path) -> Box<dyn DndProcess> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::task::spawn_local(dnd::run(self.data.clone(), rx, path));
+        Box::new(XDndProcess {
+            tx,
+            dropped: Cell::new(false),
+            _instance: self.clone(),
+        })
+    }
+
+    fn create_dnd_path(&self, file: &str) -> PathBuf {
+        with_test_data(|td| {
+            let path = td.test_dir.join(file);
+            File::create(&path).unwrap();
+            path.canonicalize().unwrap()
+        })
+    }
+}
+
+struct XDndProcess {
+    tx: UnboundedSender<DndMsg>,
+    dropped: Cell<bool>,
+    _instance: Arc<XInstance>,
+}
+
+impl DndProcess for XDndProcess {
+    fn drag_to(&self, x: i32, y: i32) {
+        if self.dropped.get() {
+            panic!("drag_to called after drop");
+        }
+        self.tx.send(DndMsg::Move(x as u32, y as u32)).unwrap();
+    }
+
+    fn do_drop(&self) {
+        if self.dropped.get() {
+            panic!("drop called multiple times");
+        }
+        self.dropped.set(true);
+        self.tx.send(DndMsg::Drop).unwrap();
+    }
+}
+
+impl Drop for XDndProcess {
+    fn drop(&mut self) {
+        if !self.dropped.get() {
+            self.tx.send(DndMsg::Cancel).unwrap();
+        }
+        self.tx.send(DndMsg::Stop).unwrap();
     }
 }
 
@@ -981,11 +1048,11 @@ impl EventLoop for Arc<XEventLoop> {
             class: RefCell::new(None),
             instance: RefCell::new(None),
             protocols: Cell::new(Protocols::empty()),
-            initial_state: Cell::new(WindowState::Withdrawn),
             desired_state: Cell::new(WindowState::Withdrawn),
             current_state: Cell::new(WindowState::Withdrawn),
             maximizable: Cell::new(true),
             icon: RefCell::new(None),
+            dragging: Cell::new(false),
         });
         self.data
             .instance
@@ -1002,6 +1069,7 @@ impl EventLoop for Arc<XEventLoop> {
     }
 
     fn barrier<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
+        log::info!("Creating event barrier");
         Box::pin(async {
             self.data.barrier_kb.press(Key::KeyEsc);
             loop {
@@ -1063,11 +1131,11 @@ struct XWindow {
     class: RefCell<Option<String>>,
     instance: RefCell<Option<String>>,
     protocols: Cell<Protocols>,
-    initial_state: Cell<WindowState>,
     desired_state: Cell<WindowState>,
     current_state: Cell<WindowState>,
     maximizable: Cell<bool>,
     icon: RefCell<Option<BackendIcon>>,
+    dragging: Cell<bool>,
 }
 
 impl XWindow {
@@ -1333,6 +1401,10 @@ impl WindowProperties for Arc<XWindow> {
 
     fn supports_transparency(&self) -> bool {
         self.format.alpha_mask != 0
+    }
+
+    fn dragging(&self) -> bool {
+        self.dragging.get()
     }
 
     fn icon(&self) -> Option<BackendIcon> {
@@ -1817,4 +1889,16 @@ struct Atoms {
     net_client_list: ffi::xcb_atom_t,
     net_client_list_stacking: ffi::xcb_atom_t,
     net_supporting_wm_check: ffi::xcb_atom_t,
+    net_wm_moveresize: ffi::xcb_atom_t,
+    x_dnd_aware: ffi::xcb_atom_t,
+    x_dnd_selection: ffi::xcb_atom_t,
+    x_dnd_enter: ffi::xcb_atom_t,
+    x_dnd_type_list: ffi::xcb_atom_t,
+    x_dnd_position: ffi::xcb_atom_t,
+    x_dnd_action_copy: ffi::xcb_atom_t,
+    x_dnd_action_private: ffi::xcb_atom_t,
+    x_dnd_status: ffi::xcb_atom_t,
+    x_dnd_leave: ffi::xcb_atom_t,
+    x_dnd_drop: ffi::xcb_atom_t,
+    uri_list: ffi::xcb_atom_t,
 }

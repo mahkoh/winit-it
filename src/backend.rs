@@ -4,6 +4,7 @@ use crate::keyboard::{Key, Layout};
 use std::any::Any;
 use std::fmt::Display;
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use winit::dpi::{Position, Size};
 use winit::event::DeviceId;
@@ -53,6 +54,8 @@ pub trait Instance {
     fn create_event_loop(&self) -> Box<dyn EventLoop>;
     fn take_screenshot(&self);
     fn before_poll(&self);
+    fn create_dnd_path(&self, file: &str) -> PathBuf;
+    fn start_dnd_process(&self, path: &Path) -> Box<dyn DndProcess>;
     fn create_seat(&self) -> Box<dyn Seat> {
         unimplemented!();
     }
@@ -60,6 +63,11 @@ pub trait Instance {
         let _ = enabled;
         unimplemented!();
     }
+}
+
+pub trait DndProcess {
+    fn drag_to(&self, x: i32, y: i32);
+    fn do_drop(&self);
 }
 
 pub trait EventLoop {
@@ -128,6 +136,7 @@ pub trait WindowProperties {
     fn icon(&self) -> Option<BackendIcon>;
     fn attention(&self) -> bool;
     fn supports_transparency(&self) -> bool;
+    fn dragging(&self) -> bool;
     fn class(&self) -> Option<String> {
         unimplemented!();
     }
@@ -330,6 +339,15 @@ impl dyn Window {
     pub fn inner_offset(&self) -> (i32, i32) {
         let (left, _, top, _) = self.frame_extents();
         (left as i32, top as i32)
+    }
+
+    pub async fn dragging(&self, dragging: bool) {
+        log::info!(
+            "Waiting for window {} to become dragging {}",
+            self.id(),
+            dragging,
+        );
+        self.await_property(|p| p.dragging() == dragging).await
     }
 
     pub async fn outer_position(&self, x: i32, y: i32) {

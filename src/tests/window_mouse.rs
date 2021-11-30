@@ -1,10 +1,10 @@
 use crate::backend::{Button, Instance};
+use crate::eventstash::EventStash;
 use crate::keyboard::Key;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, TouchPhase};
 use winit::keyboard::{KeyCode, ModifiersState};
 use winit::window::WindowBuilder;
-use crate::eventstash::EventStash;
 
 test!(run);
 

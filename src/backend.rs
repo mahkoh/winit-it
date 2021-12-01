@@ -37,6 +37,7 @@ bitflags::bitflags! {
         const SECOND_MONITOR = 1 << 20;
         const MONITOR_NAMES = 1 << 21;
         const SINGLE_THREADED = 1 << 22;
+        const WINIT_SET_CURSOR_POSITION = 1 << 23;
     }
 }
 
@@ -56,6 +57,15 @@ pub trait Instance {
     fn before_poll(&self);
     fn create_dnd_path(&self, file: &str) -> PathBuf;
     fn start_dnd_process(&self, path: &Path) -> Box<dyn DndProcess>;
+    fn cursor_grabbed<'a>(&'a self, grab: bool) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
+        let _ = grab;
+        unimplemented!();
+    }
+    fn cursor_position<'a>(&'a self, x: i32, y: i32) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
+        let _ = x;
+        let _ = y;
+        unimplemented!();
+    }
     fn create_seat(&self) -> Box<dyn Seat> {
         unimplemented!();
     }
@@ -178,6 +188,17 @@ impl dyn Window {
     pub fn reset_dead_keys(&self) {
         log::info!("Resetting dead keys");
         self.winit().reset_dead_keys();
+    }
+
+    pub fn winit_set_cursor_grab(&self, grab: bool) {
+        log::info!("Setting cursor grab of window {} to {}", self.id(), grab);
+        self.winit().set_cursor_grab(grab).unwrap();
+    }
+
+    pub fn winit_set_cursor_position<P: Into<Position>>(&self, p: P) {
+        let position = p.into();
+        log::info!("Setting cursor position of window {} to {:?}", self.id(), position);
+        self.winit().set_cursor_position(position).unwrap();
     }
 
     pub fn winit_set_decorations(&self, decorations: bool) {

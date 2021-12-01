@@ -2,6 +2,7 @@ use crate::backend::{
     Backend, BackendDeviceId, BackendFlags, BackendIcon, Button, Device, DndProcess, EventLoop,
     Instance, Keyboard, Mouse, PressedButton, PressedKey, Seat, Window, WindowProperties,
 };
+use crate::backends::x11::dnd::DndMsg;
 use crate::backends::x11::layout::{layouts, set_names, Layouts};
 use crate::backends::x11::wm::TITLE_HEIGHT;
 use crate::backends::x11::MessageType::{
@@ -13,20 +14,22 @@ use crate::env::set_env;
 use crate::event::{map_event, DeviceEvent, DeviceEventExt, Event, UserEvent};
 use crate::eventstream::EventStream;
 use crate::keyboard::{Key, Layout};
+use crate::test::with_test_data;
 use parking_lot::Mutex;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
+use std::fs::File;
 use std::future::Future;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Command;
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 use std::{mem, ptr};
-use std::fs::File;
-use std::path::{Path, PathBuf};
 use tokio::io::unix::AsyncFd;
 use tokio::io::Interest;
 use tokio::sync::mpsc::UnboundedSender;
@@ -44,8 +47,6 @@ use winit::window::{Window as WWindow, WindowBuilder};
 use xcb_dl::{ffi, Xcb, XcbRandr, XcbRender, XcbXinput, XcbXkb};
 use xcb_dl_util::error::XcbErrorParser;
 use MessageType::{MT_CREATE_KEYBOARD, MT_CREATE_KEYBOARD_REPLY, MT_KEY_PRESS, MT_KEY_RELEASE};
-use crate::backends::x11::dnd::DndMsg;
-use crate::test::with_test_data;
 
 mod dnd;
 mod evdev;
@@ -330,6 +331,7 @@ impl Backend for Arc<XBackend> {
             | BackendFlags::CREATE_SEAT
             | BackendFlags::SECOND_MONITOR
             | BackendFlags::MONITOR_NAMES
+            | BackendFlags::WINIT_SET_CURSOR_POSITION
     }
 }
 
@@ -428,6 +430,52 @@ impl XInstance {
         unsafe {
             assert_eq!(msg.ty, MT_CREATE_KEYBOARD_REPLY as _);
             msg.create_keyboard_reply.id as _
+        }
+    }
+
+    fn cursor_grab_status(&self) -> bool {
+        let grabbed;
+        unsafe {
+            let xcb = &self.data.backend.xcb;
+            let mut err = ptr::null_mut();
+            let reply = xcb.xcb_grab_pointer_reply(
+                self.c.c,
+                xcb.xcb_grab_pointer(self.c.c, 1, self.c.screen.root, 0, 0, 0, 0, 0, 0),
+                &mut err,
+            );
+            let reply = match self.c.errors.check(xcb, reply, err) {
+                Ok(r) => r,
+                Err(e) => panic!("Could not grab pointer: {}", e),
+            };
+            grabbed = match reply.status as u32 {
+                0 => false,
+                ffi::XCB_GRAB_STATUS_ALREADY_GRABBED => true,
+                _ => panic!("Unexpected grab status"),
+            };
+            if !grabbed {
+                let cookie = xcb.xcb_ungrab_pointer_checked(self.c.c, 0);
+                if let Err(e) = self.c.errors.check_cookie(xcb, cookie) {
+                    panic!("Could not ungrab pointer: {}", e);
+                }
+            }
+        }
+        grabbed
+    }
+
+    fn cursor_position_(&self) -> (i32, i32) {
+        unsafe {
+            let xcb = &self.data.backend.xcb;
+            let mut err = ptr::null_mut();
+            let reply = xcb.xcb_query_pointer_reply(
+                self.c.c,
+                xcb.xcb_query_pointer(self.c.c, self.c.screen.root),
+                &mut err,
+            );
+            let reply = match self.c.errors.check(xcb, reply, err) {
+                Ok(r) => r,
+                Err(e) => panic!("Could not query pointer: {}", e),
+            };
+            (reply.root_x as _, reply.root_y as _)
         }
     }
 
@@ -789,6 +837,29 @@ impl Instance for Arc<XInstance> {
             let path = td.test_dir.join(file);
             File::create(&path).unwrap();
             path.canonicalize().unwrap()
+        })
+    }
+
+    fn cursor_grabbed<'a>(&'a self, grab: bool) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
+        Box::pin(async move {
+            loop {
+                if self.cursor_grab_status() == grab {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+    }
+
+    fn cursor_position<'a>(&'a self, x: i32, y: i32) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
+        log::info!("Waiting for cursor position to become {}x{}", x, y);
+        Box::pin(async move {
+            loop {
+                if self.cursor_position_() == (x, y) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
         })
     }
 }

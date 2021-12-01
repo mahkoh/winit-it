@@ -28,6 +28,7 @@ mod always_on_top;
 mod available_monitors;
 #[cfg(target_os = "linux")]
 mod class;
+mod cursor_grab;
 mod decorations;
 mod delete_window;
 mod destroyed;
@@ -58,6 +59,7 @@ mod user_event;
 mod visible;
 mod window_keyboard;
 mod window_mouse;
+mod cursor_position;
 
 use crate::backend::{BackendFlags, Instance};
 use std::future::Future;
@@ -109,5 +111,7 @@ pub fn tests() -> Vec<Box<dyn Test>> {
         Box::new(window_mouse::Test),
         Box::new(drag_window::Test),
         Box::new(dnd::Test),
+        Box::new(cursor_grab::Test),
+        Box::new(cursor_position::Test),
     ]
 }

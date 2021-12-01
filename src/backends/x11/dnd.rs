@@ -1,9 +1,9 @@
 use super::XInstanceData;
-use crate::backends::x11::{XConnection};
+use crate::backends::x11::XConnection;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::ptr;
-use std::sync::{Arc};
+use std::sync::Arc;
 use tokio::io::unix::AsyncFd;
 use tokio::io::Interest;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -132,7 +132,11 @@ impl Dnd {
             Some(w) => w,
             _ => return,
         };
-        let e = self.send_msg(window, self.instance.atoms.x_dnd_leave, [self.window_id, 0, 0, 0, 0]);
+        let e = self.send_msg(
+            window,
+            self.instance.atoms.x_dnd_leave,
+            [self.window_id, 0, 0, 0, 0],
+        );
         if let Err(e) = e {
             log::warn!("Could not send XdndLeave to {}: {}", window, e);
         }
@@ -156,7 +160,12 @@ impl Dnd {
             };
             let e = self.send_msg(window, ty, [self.window_id, 0, v2, 0, 0]);
             if let Err(e) = e {
-                log::warn!("Could not send {} to {}: {}", if accept { "XdndDrop" } else { "XdndLeave" }, window, e);
+                log::warn!(
+                    "Could not send {} to {}: {}",
+                    if accept { "XdndDrop" } else { "XdndLeave" },
+                    window,
+                    e
+                );
                 return;
             }
             self.dropped = true;
@@ -288,11 +297,7 @@ impl Dnd {
                 ],
             );
             if let Err(e) = e {
-                log::warn!(
-                    "Could not send XdndPosition message to {}: {}",
-                    window,
-                    e
-                );
+                log::warn!("Could not send XdndPosition message to {}: {}", window, e);
                 return;
             }
             self.accept = None;
@@ -331,7 +336,10 @@ impl Dnd {
     fn handle_selection_request(&mut self, event: &ffi::xcb_generic_event_t) {
         let event = unsafe { &*(event as *const _ as *const ffi::xcb_selection_request_event_t) };
         log::info!("Got selection request: {:?}", event);
-        if event.owner != self.window_id || event.selection != self.instance.atoms.x_dnd_selection || event.target != self.instance.atoms.uri_list {
+        if event.owner != self.window_id
+            || event.selection != self.instance.atoms.x_dnd_selection
+            || event.target != self.instance.atoms.uri_list
+        {
             log::warn!("Received unexpected selection request: {:?}", event);
             return;
         }
@@ -370,9 +378,14 @@ impl Dnd {
                 property,
                 ..Default::default()
             };
-            let cookie = xcb.xcb_send_event_checked(self.c.c, 0, event.requestor, 0, &msg as *const _ as _);
+            let cookie =
+                xcb.xcb_send_event_checked(self.c.c, 0, event.requestor, 0, &msg as *const _ as _);
             if let Err(e) = self.c.errors.check_cookie(xcb, cookie) {
-                log::warn!("Could not send selection notify to {}: {}", event.requestor, e);
+                log::warn!(
+                    "Could not send selection notify to {}: {}",
+                    event.requestor,
+                    e
+                );
             }
         }
     }
@@ -389,12 +402,17 @@ impl Dnd {
         }
         let data = unsafe { event.data.data32 };
         if Some(data[0]) != self.target {
-            log::warn!("Received client message from window other than the current target: {:?}", event);
+            log::warn!(
+                "Received client message from window other than the current target: {:?}",
+                event
+            );
             return;
         }
         let accept_was_none = self.accept.is_none();
         self.accept = Some(data[1] & 1 == 1);
-        if data[4] != self.instance.atoms.x_dnd_action_copy && data[4] != self.instance.atoms.x_dnd_action_private {
+        if data[4] != self.instance.atoms.x_dnd_action_copy
+            && data[4] != self.instance.atoms.x_dnd_action_private
+        {
             log::warn!("Unexpected dnd action: {}", data[4]);
         }
         if accept_was_none && self.drop {

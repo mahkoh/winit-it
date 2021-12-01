@@ -1,4 +1,4 @@
-use crate::backend::{Instance};
+use crate::backend::Instance;
 use winit::dpi::PhysicalSize;
 use winit::window::WindowBuilder;
 
@@ -14,7 +14,9 @@ async fn run(instance: &dyn Instance) {
     }));
     window.mapped(true).await;
     window.set_outer_position(-window.inner_offset().0, -window.inner_offset().1);
-    window.outer_position(-window.inner_offset().0, -window.inner_offset().1).await;
+    window
+        .outer_position(-window.inner_offset().0, -window.inner_offset().1)
+        .await;
 
     let path = instance.create_dnd_path("test.txt");
 

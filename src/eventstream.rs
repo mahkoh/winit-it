@@ -9,6 +9,7 @@ use std::pin::Pin;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::RawKeyEvent;
 use winit::keyboard::ModifiersState;
+use winit::window::WindowId;
 
 pub trait EventStream {
     fn event<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = Event> + 'a>>;
@@ -37,6 +38,15 @@ impl<'a> dyn EventStream + 'a {
     pub async fn device_event(&mut self) -> DeviceEventExt {
         loop {
             if let Event::DeviceEvent(we) = self.event().await {
+                return we;
+            }
+        }
+    }
+
+    pub async fn redraw_requested_event(&mut self) -> WindowId {
+        log::debug!("Awaiting window redraw_requested");
+        loop {
+            if let Event::RedrawRequested(we) = self.event().await {
                 return we;
             }
         }

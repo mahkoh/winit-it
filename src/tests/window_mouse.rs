@@ -1,6 +1,7 @@
 use crate::backend::{Button, Instance};
 use crate::eventstash::EventStash;
 use crate::keyboard::Key;
+use std::collections::HashSet;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, TouchPhase};
 use winit::keyboard::{KeyCode, ModifiersState};
@@ -22,6 +23,9 @@ async fn run(instance: &dyn Instance) {
     }));
     window.mapped(true).await;
     window.set_outer_position(-window.inner_offset().0, -window.inner_offset().1);
+    window
+        .outer_position(-window.inner_offset().0, -window.inner_offset().1)
+        .await;
 
     seat.focus(&*window);
 
@@ -156,5 +160,67 @@ async fn run(instance: &dyn Instance) {
         mouse1.move_(-450, -450);
         let (_, mc) = events.window_modifiers().await;
         assert_eq!(mc, ModifiersState::SHIFT);
+    }
+
+    {
+        log::info!("Testing multi-window modifiers events");
+        let w2 = el.create_window(WindowBuilder::new().with_inner_size(PhysicalSize {
+            width: 100,
+            height: 100,
+        }));
+        w2.mapped(true).await;
+        w2.set_outer_position(300, 300);
+        w2.outer_position(300, 300).await;
+        seat.focus(&*window);
+        {
+            seat.position_cursor(310 + w2.inner_offset().0, 310 + w2.inner_offset().1);
+            loop {
+                let (we, cp) = events.window_cursor_moved().await;
+                if we.window_id == w2.winit_id() && cp.position.x == 10.0 && cp.position.y == 10.0 {
+                    break;
+                }
+            }
+            let _shift = kb1.press(Key::KeyLeftshift);
+            let mut targets = HashSet::new();
+            targets.insert(window.winit_id());
+            targets.insert(w2.winit_id());
+            while !targets.is_empty() {
+                let (we, mo) = events.window_modifiers().await;
+                assert_eq!(mo, ModifiersState::SHIFT);
+                targets.remove(&we.window_id);
+            }
+        }
+        el.barrier().await;
+        {
+            seat.position_cursor(500, 500);
+            events.window_cursor_left().await;
+            let _shift = kb1.press(Key::KeyLeftshift);
+            let (we, mo) = events.window_modifiers().await;
+            assert_eq!(mo, ModifiersState::SHIFT);
+            assert_eq!(we.window_id, window.winit_id());
+            seat.position_cursor(310 + w2.inner_offset().0, 310 + w2.inner_offset().1);
+            let (we, mo) = events.window_modifiers().await;
+            assert_eq!(mo, ModifiersState::SHIFT);
+            assert_eq!(we.window_id, w2.winit_id());
+        }
+        el.barrier().await;
+        {
+            seat.position_cursor(500, 500);
+            events.window_cursor_left().await;
+            {
+                let _shift = kb1.press(Key::KeyLeftshift);
+                let (we, mo) = events.window_modifiers().await;
+                assert_eq!(mo, ModifiersState::SHIFT);
+                assert_eq!(we.window_id, window.winit_id());
+            }
+            let (we, mo) = events.window_modifiers().await;
+            assert_eq!(mo, ModifiersState::empty());
+            assert_eq!(we.window_id, window.winit_id());
+            el.barrier().await;
+            seat.position_cursor(310 + w2.inner_offset().0, 310 + w2.inner_offset().1);
+            let (we, mo) = events.window_modifiers().await;
+            assert_eq!(mo, ModifiersState::empty());
+            assert_eq!(we.window_id, w2.winit_id());
+        }
     }
 }

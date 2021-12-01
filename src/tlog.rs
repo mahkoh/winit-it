@@ -1,6 +1,7 @@
 use backtrace::Backtrace;
 use chrono::Local;
-use log::{Log, Metadata, Record};
+use colored::{ColoredString, Colorize};
+use log::{Level, Log, Metadata, Record};
 use std::fs::File;
 use std::io::{LineWriter, Write};
 
@@ -20,6 +21,15 @@ impl LogState {
 
 struct Logger;
 
+fn level_color(level: Level) -> ColoredString {
+    let s = level.to_string();
+    match level {
+        Level::Error => s.red(),
+        Level::Warn => s.yellow(),
+        _ => s.normal(),
+    }
+}
+
 impl Log for Logger {
     fn enabled(&self, metadata: &Metadata) -> bool {
         metadata.level() <= LOG_LEVEL
@@ -31,7 +41,7 @@ impl Log for Logger {
             eprintln!(
                 "{} [{}] [{}] [{}]: {}",
                 now,
-                record.level(),
+                level_color(record.level()),
                 std::thread::current().name().unwrap_or("<unnamed thread>"),
                 record.module_path().unwrap_or(""),
                 record.args()

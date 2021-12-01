@@ -10,7 +10,9 @@ use winit::dpi::{Position, Size};
 use winit::event::DeviceId;
 use winit::event_loop::EventLoop as WEventLoop;
 use winit::monitor::MonitorHandle;
-use winit::window::{Icon, UserAttentionType, Window as WWindow, WindowBuilder, WindowId};
+use winit::window::{
+    CursorIcon, Fullscreen, Icon, UserAttentionType, Window as WWindow, WindowBuilder, WindowId,
+};
 
 bitflags::bitflags! {
     pub struct BackendFlags: u32 {
@@ -38,10 +40,13 @@ bitflags::bitflags! {
         const MONITOR_NAMES = 1 << 21;
         const SINGLE_THREADED = 1 << 22;
         const WINIT_SET_CURSOR_POSITION = 1 << 23;
+        const MANUAL_VERIFICATION = 1 << 24;
     }
 }
 
-pub const NON_REQUIREMENT_FLAGS: BackendFlags = BackendFlags::SINGLE_THREADED;
+pub fn non_requirement_flags() -> BackendFlags {
+    BackendFlags::SINGLE_THREADED | BackendFlags::MANUAL_VERIFICATION
+}
 
 pub trait Backend: Sync {
     fn instantiate(&self) -> Box<dyn Instance>;
@@ -59,11 +64,6 @@ pub trait Instance {
     fn start_dnd_process(&self, path: &Path) -> Box<dyn DndProcess>;
     fn cursor_grabbed<'a>(&'a self, grab: bool) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
         let _ = grab;
-        unimplemented!();
-    }
-    fn cursor_position<'a>(&'a self, x: i32, y: i32) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
-        let _ = x;
-        let _ = y;
         unimplemented!();
     }
     fn create_seat(&self) -> Box<dyn Seat> {
@@ -190,14 +190,37 @@ impl dyn Window {
         self.winit().reset_dead_keys();
     }
 
+    pub fn winit_set_fullscreen(&self, fs: Option<Fullscreen>) {
+        log::info!("Setting fullscreen of window {} to {:?}", self.id(), fs);
+        self.winit().set_fullscreen(fs);
+    }
+
     pub fn winit_set_cursor_grab(&self, grab: bool) {
         log::info!("Setting cursor grab of window {} to {}", self.id(), grab);
         self.winit().set_cursor_grab(grab).unwrap();
     }
 
+    pub fn winit_set_cursor_icon(&self, icon: CursorIcon) {
+        log::info!("Setting cursor icon of window {} to {:?}", self.id(), icon);
+        self.winit().set_cursor_icon(icon);
+    }
+
+    pub fn winit_set_cursor_visible(&self, visible: bool) {
+        log::info!(
+            "Setting cursor visible of window {} to {:?}",
+            self.id(),
+            visible
+        );
+        self.winit().set_cursor_visible(visible);
+    }
+
     pub fn winit_set_cursor_position<P: Into<Position>>(&self, p: P) {
         let position = p.into();
-        log::info!("Setting cursor position of window {} to {:?}", self.id(), position);
+        log::info!(
+            "Setting cursor position of window {} to {:?}",
+            self.id(),
+            position
+        );
         self.winit().set_cursor_position(position).unwrap();
     }
 
@@ -519,7 +542,8 @@ pub trait Seat {
     fn focus(&self, window: &dyn Window);
     fn un_focus(&self);
     fn set_layout(&self, layout: Layout);
-    fn position_cursor(&self, x: i32, y: i32);
+    fn set_cursor_position(&self, x: i32, y: i32);
+    fn cursor_position(&self) -> (i32, i32);
     fn is(&self, device_id: DeviceId) -> bool;
 }
 

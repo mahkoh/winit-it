@@ -28,7 +28,11 @@ mod always_on_top;
 mod available_monitors;
 #[cfg(target_os = "linux")]
 mod class;
+mod current_monitor;
 mod cursor_grab;
+mod cursor_icon;
+mod cursor_position;
+mod cursor_visible;
 mod decorations;
 mod delete_window;
 mod destroyed;
@@ -39,7 +43,11 @@ mod dnd;
 mod drag_window;
 mod focused;
 mod focused_multi_seat;
+mod fullscreen;
 mod icon;
+mod logical_cursor_position;
+mod logical_inner_size;
+mod logical_size_bounds;
 mod maximize;
 mod minimize;
 mod physical_inner_size;
@@ -59,7 +67,7 @@ mod user_event;
 mod visible;
 mod window_keyboard;
 mod window_mouse;
-mod cursor_position;
+mod fullscreen2;
 
 use crate::backend::{BackendFlags, Instance};
 use std::future::Future;
@@ -113,5 +121,13 @@ pub fn tests() -> Vec<Box<dyn Test>> {
         Box::new(dnd::Test),
         Box::new(cursor_grab::Test),
         Box::new(cursor_position::Test),
+        Box::new(cursor_icon::Test),
+        Box::new(cursor_visible::Test),
+        Box::new(logical_inner_size::Test),
+        Box::new(logical_cursor_position::Test),
+        Box::new(logical_size_bounds::Test),
+        Box::new(current_monitor::Test),
+        Box::new(fullscreen::Test),
+        Box::new(fullscreen2::Test),
     ]
 }

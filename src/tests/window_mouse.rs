@@ -11,7 +11,7 @@ test!(run);
 
 async fn run(instance: &dyn Instance) {
     let seat = instance.default_seat();
-    seat.position_cursor(500, 500);
+    seat.set_cursor_position(500, 500);
     let mouse1 = seat.add_mouse();
     let kb1 = seat.add_keyboard();
 
@@ -173,7 +173,7 @@ async fn run(instance: &dyn Instance) {
         w2.outer_position(300, 300).await;
         seat.focus(&*window);
         {
-            seat.position_cursor(310 + w2.inner_offset().0, 310 + w2.inner_offset().1);
+            seat.set_cursor_position(310 + w2.inner_offset().0, 310 + w2.inner_offset().1);
             loop {
                 let (we, cp) = events.window_cursor_moved().await;
                 if we.window_id == w2.winit_id() && cp.position.x == 10.0 && cp.position.y == 10.0 {
@@ -192,20 +192,20 @@ async fn run(instance: &dyn Instance) {
         }
         el.barrier().await;
         {
-            seat.position_cursor(500, 500);
+            seat.set_cursor_position(500, 500);
             events.window_cursor_left().await;
             let _shift = kb1.press(Key::KeyLeftshift);
             let (we, mo) = events.window_modifiers().await;
             assert_eq!(mo, ModifiersState::SHIFT);
             assert_eq!(we.window_id, window.winit_id());
-            seat.position_cursor(310 + w2.inner_offset().0, 310 + w2.inner_offset().1);
+            seat.set_cursor_position(310 + w2.inner_offset().0, 310 + w2.inner_offset().1);
             let (we, mo) = events.window_modifiers().await;
             assert_eq!(mo, ModifiersState::SHIFT);
             assert_eq!(we.window_id, w2.winit_id());
         }
         el.barrier().await;
         {
-            seat.position_cursor(500, 500);
+            seat.set_cursor_position(500, 500);
             events.window_cursor_left().await;
             {
                 let _shift = kb1.press(Key::KeyLeftshift);
@@ -217,7 +217,7 @@ async fn run(instance: &dyn Instance) {
             assert_eq!(mo, ModifiersState::empty());
             assert_eq!(we.window_id, window.winit_id());
             el.barrier().await;
-            seat.position_cursor(310 + w2.inner_offset().0, 310 + w2.inner_offset().1);
+            seat.set_cursor_position(310 + w2.inner_offset().0, 310 + w2.inner_offset().1);
             let (we, mo) = events.window_modifiers().await;
             assert_eq!(mo, ModifiersState::empty());
             assert_eq!(we.window_id, w2.winit_id());

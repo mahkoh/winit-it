@@ -2,6 +2,7 @@ use crate::event::{
     DeviceButton, DeviceEvent, DeviceEventExt, DeviceMouseMotion, DeviceMouseWheel, Event,
     UserEvent, WindowCursorEntered, WindowCursorLeft, WindowCursorMoved, WindowEvent,
     WindowEventExt, WindowKeyboardInput, WindowMouseInput, WindowMouseWheel,
+    WindowScaleFactorChanged,
 };
 use std::future::Future;
 use std::path::PathBuf;
@@ -177,6 +178,19 @@ impl<'a> dyn EventStream + 'a {
             let we = self.window_event().await;
             if let WindowEvent::CursorLeft(cl) = &we.event {
                 log::debug!("Got cursor left: {:?}", cl);
+                return (we.clone(), cl.clone());
+            };
+        }
+    }
+
+    pub async fn window_scale_factor_changed(
+        &mut self,
+    ) -> (WindowEventExt, WindowScaleFactorChanged) {
+        log::debug!("Awaiting scale factor changed");
+        loop {
+            let we = self.window_event().await;
+            if let WindowEvent::ScaleFactorChanged(cl) = &we.event {
+                log::debug!("Got scale factor changed: {:?}", cl);
                 return (we.clone(), cl.clone());
             };
         }

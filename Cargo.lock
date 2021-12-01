@@ -190,6 +190,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "colored"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3616f750b84d8f0de8a58bda93e08e2a81ad3f523089b05f1dffecab48c6cbd"
+dependencies = [
+ "atty",
+ "lazy_static",
+ "winapi",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1178,7 +1189,7 @@ checksum = "b7de33c687404ec3045d4a0d437580455257c0436f858d702f244e7d652f9f07"
 dependencies = [
  "atty",
  "chrono",
- "colored",
+ "colored 1.9.3",
  "log",
  "winapi",
 ]
@@ -1513,7 +1524,9 @@ dependencies = [
  "byteorder",
  "cfg-if 1.0.0",
  "chrono",
+ "colored 2.0.0",
  "futures",
+ "isnt",
  "libc",
  "log",
  "mio 0.8.0",

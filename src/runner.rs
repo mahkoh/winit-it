@@ -1,7 +1,8 @@
-use crate::backend::{Backend, BackendFlags, NON_REQUIREMENT_FLAGS};
+use crate::backend::{non_requirement_flags, Backend, BackendFlags};
 use crate::test::TestData;
 use crate::tests::Test;
 use crate::tlog::LogState;
+use isnt::std_1::vec::IsntVecExt;
 use parking_lot::Mutex;
 use rayon::prelude::*;
 use std::cell::{Cell, RefCell};
@@ -9,8 +10,6 @@ use std::fs::OpenOptions;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 use tokio::task::LocalSet;
 
@@ -19,65 +18,77 @@ pub struct Execution {
 }
 
 struct BackendExecution {
-    pub dir: PathBuf,
+    dir: PathBuf,
+    result: Mutex<BackendResult>,
+}
+
+#[derive(Default)]
+struct BackendResult {
+    failed: Vec<String>,
+    not_run: Vec<(String, BackendFlags)>,
+    manual_verification: Vec<String>,
 }
 
 pub fn run_tests(exec: &Execution, backend: &dyn Backend, tests: &[Box<dyn Test>]) {
     let be = BackendExecution {
         dir: exec.dir.join(backend.name()),
+        result: Default::default(),
     };
     log::info!("Running tests for backend {}", backend.name());
-    let num_failed = AtomicUsize::new(0);
-    let rto = |(idx, test): (usize, &Box<dyn Test>)| {
-        run_test_outer(&be, backend, &**test, idx + 1, tests.len(), &num_failed)
-    };
+    let rto = |test: &Box<dyn Test>| run_test_outer(&be, backend, &**test);
     if backend.flags().contains(BackendFlags::MT_SAFE) {
         tests
             .par_iter()
-            .enumerate()
-            .filter(|(_, t)| !t.flags().contains(BackendFlags::SINGLE_THREADED))
+            .filter(|t| !t.flags().contains(BackendFlags::SINGLE_THREADED))
             .for_each(rto);
         tests
             .iter()
-            .enumerate()
-            .filter(|(_, t)| t.flags().contains(BackendFlags::SINGLE_THREADED))
+            .filter(|t| t.flags().contains(BackendFlags::SINGLE_THREADED))
             .for_each(rto);
     } else {
-        tests.iter().enumerate().for_each(rto);
+        tests.iter().for_each(rto);
     }
-    log::info!(
-        "{} out of {} tests failed",
-        num_failed.load(Relaxed),
-        tests.len()
-    );
+    let results = be.result.lock();
+    if results.not_run.is_not_empty() {
+        log::warn!("The following tests were not run due to missing flags:");
+        for (test, flags) in &results.not_run {
+            log::warn!("  - {}. Missing flags: {:?}", test, flags);
+        }
+    }
+    if results.manual_verification.is_not_empty() {
+        log::warn!("The following tests require manual verification:");
+        for test in &results.manual_verification {
+            log::warn!("  - {}", test);
+        }
+    }
+    if results.failed.is_not_empty() {
+        log::error!("The following tests failed:");
+        for test in &results.failed {
+            log::error!("  - {}", test);
+        }
+    }
 }
 
-fn run_test_outer(
-    be: &BackendExecution,
-    backend: &dyn Backend,
-    test: &dyn Test,
-    idx: usize,
-    total: usize,
-    num_failed: &AtomicUsize,
-) {
+fn run_test_outer(be: &BackendExecution, backend: &dyn Backend, test: &dyn Test) {
     let failed = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let missing_flags = test.flags() & !backend.flags() & !NON_REQUIREMENT_FLAGS;
+        let missing_flags = test.flags() & !backend.flags() & !non_requirement_flags();
         if !missing_flags.is_empty() {
-            log::warn!(
-                "{}/{}: Skipping unsupported test {}. Missing flags: {:?}",
-                idx,
-                total,
-                test.name(),
-                missing_flags,
-            );
+            be.result
+                .lock()
+                .not_run
+                .push((test.name().to_string(), missing_flags));
             return false;
         }
-        log::info!("{}/{}: Running test {}", idx, total, test.name());
+        log::info!("Running test {}", test.name());
         run_test(&be, backend, test)
     }));
     if failed.unwrap_or(true) {
-        num_failed.fetch_add(1, Relaxed);
-        log::error!("{}/{}: Test {} failed", idx, total, test.name());
+        be.result.lock().failed.push(test.name().to_string());
+    } else if test.flags().contains(BackendFlags::MANUAL_VERIFICATION) {
+        be.result
+            .lock()
+            .manual_verification
+            .push(test.name().to_string());
     }
 }
 

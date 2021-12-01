@@ -44,7 +44,7 @@ use winit::platform::unix::{
     DeviceIdExtUnix, EventLoopExtUnix, EventLoopWindowTargetExtUnix, WindowExtUnix,
 };
 use winit::window::{Window as WWindow, WindowBuilder};
-use xcb_dl::{ffi, Xcb, XcbRandr, XcbRender, XcbXinput, XcbXkb};
+use xcb_dl::{ffi, Xcb, XcbRandr, XcbRender, XcbXfixes, XcbXinput, XcbXkb};
 use xcb_dl_util::error::XcbErrorParser;
 use MessageType::{MT_CREATE_KEYBOARD, MT_CREATE_KEYBOARD_REPLY, MT_KEY_PRESS, MT_KEY_RELEASE};
 
@@ -77,6 +77,7 @@ pub fn backend() -> Box<dyn Backend> {
             xcb: Xcb::load_loose().unwrap(),
             xinput: XcbXinput::load_loose().unwrap(),
             xrandr: XcbRandr::load_loose().unwrap(),
+            xfixes: XcbXfixes::load_loose().unwrap(),
             render: XcbRender::load_loose().unwrap(),
             xkb: XcbXkb::load_loose().unwrap(),
             layouts: layouts(),
@@ -90,6 +91,7 @@ struct XBackend {
     xcb: Xcb,
     xinput: XcbXinput,
     xrandr: XcbRandr,
+    xfixes: XcbXfixes,
     render: XcbRender,
     xkb: XcbXkb,
     layouts: Layouts,
@@ -219,6 +221,7 @@ impl Backend for Arc<XBackend> {
         instance.atoms.net_wm_ping = c.atom("_NET_WM_PING");
         instance.atoms.utf8_string = c.atom("UTF8_STRING");
         instance.atoms.net_wm_state_above = c.atom("_NET_WM_STATE_ABOVE");
+        instance.atoms.net_wm_state_fullscreen = c.atom("_NET_WM_STATE_FULLSCREEN");
         instance.atoms.net_frame_extents = c.atom("_NET_FRAME_EXTENTS");
         instance.atoms.net_wm_state_maximized_horz = c.atom("_NET_WM_STATE_MAXIMIZED_HORZ");
         instance.atoms.net_wm_state_maximized_vert = c.atom("_NET_WM_STATE_MAXIMIZED_VERT");
@@ -262,6 +265,12 @@ impl Backend for Arc<XBackend> {
             let reply = self.xrandr.xcb_randr_query_version_reply(
                 c.c,
                 self.xrandr.xcb_randr_query_version(c.c, 1, 3),
+                &mut err,
+            );
+            c.errors.check(&self.xcb, reply, err).unwrap();
+            let reply = self.xfixes.xcb_xfixes_query_version_reply(
+                c.c,
+                self.xfixes.xcb_xfixes_query_version(c.c, 1, 0),
                 &mut err,
             );
             c.errors.check(&self.xcb, reply, err).unwrap();
@@ -462,23 +471,6 @@ impl XInstance {
         grabbed
     }
 
-    fn cursor_position_(&self) -> (i32, i32) {
-        unsafe {
-            let xcb = &self.data.backend.xcb;
-            let mut err = ptr::null_mut();
-            let reply = xcb.xcb_query_pointer_reply(
-                self.c.c,
-                xcb.xcb_query_pointer(self.c.c, self.c.screen.root),
-                &mut err,
-            );
-            let reply = match self.c.errors.check(xcb, reply, err) {
-                Ok(r) => r,
-                Err(e) => panic!("Could not query pointer: {}", e),
-            };
-            (reply.root_x as _, reply.root_y as _)
-        }
-    }
-
     fn add_mouse(&self) -> ffi::xcb_input_device_id_t {
         let mut msg = Message {
             ty: MT_CREATE_MOUSE as _,
@@ -651,6 +643,34 @@ impl XInstance {
             (pointer_id, kb_id)
         }
     }
+
+    fn get_cursor(&self) -> (Vec<u32>, i32, i32, i32, i32) {
+        unsafe {
+            let xcb = &self.data.backend.xcb;
+            let xfixes = &self.data.backend.xfixes;
+            let mut err = ptr::null_mut();
+            let reply = xfixes.xcb_xfixes_get_cursor_image_reply(
+                self.c.c,
+                xfixes.xcb_xfixes_get_cursor_image(self.c.c),
+                &mut err,
+            );
+            let reply = match self.c.errors.check(xcb, reply, err) {
+                Ok(r) => r,
+                Err(e) => panic!("Could not get cursor image: {}", e),
+            };
+            let image = std::slice::from_raw_parts(
+                xfixes.xcb_xfixes_get_cursor_image_cursor_image(&*reply),
+                (reply.width * reply.height) as usize,
+            );
+            (
+                image.to_vec(),
+                reply.width as _,
+                reply.height as _,
+                reply.x as i32 - reply.xhot as i32,
+                reply.y as i32 - reply.yhot as i32,
+            )
+        }
+    }
 }
 
 fn create_seat(instance: &Arc<XInstance>) -> Arc<XSeat> {
@@ -745,16 +765,47 @@ impl Instance for Arc<XInstance> {
                 ),
                 &mut err,
             );
-            let image = self
+            let mut image = self
                 .c
                 .errors
                 .check(&self.data.backend.xcb, reply, err)
                 .unwrap();
-            let data = std::slice::from_raw_parts(
-                self.data.backend.xcb.xcb_get_image_data(&*image),
+            let data = std::slice::from_raw_parts_mut(
+                self.data.backend.xcb.xcb_get_image_data(&mut *image),
                 image.length as usize * 4,
             );
-            crate::screenshot::log_image(data, attr.width as _, attr.height as _);
+            let width = attr.width as i32;
+            let height = attr.height as i32;
+            let (cursor, cwidth, cheight, cx, cy) = self.get_cursor();
+            for row in 0..cheight {
+                if row + cy < 0 {
+                    continue;
+                }
+                if row + cy >= width {
+                    break;
+                }
+                for col in 0..cwidth {
+                    if col + cx < 0 {
+                        continue;
+                    }
+                    if col + cx >= width {
+                        break;
+                    }
+                    let data_off = 4 * ((cy + row) * width + cx + col) as usize;
+                    let cpixel = cursor[(row * cwidth + col) as usize];
+                    let alpha = (cpixel >> 24) & 0xff;
+                    let red = (cpixel >> 16) & 0xff;
+                    let green = (cpixel >> 8) & 0xff;
+                    let blue = (cpixel >> 0) & 0xff;
+                    data[data_off + 0] =
+                        ((alpha * blue + (256 - alpha) * data[data_off + 0] as u32) >> 8) as u8;
+                    data[data_off + 1] =
+                        ((alpha * green + (256 - alpha) * data[data_off + 1] as u32) >> 8) as u8;
+                    data[data_off + 2] =
+                        ((alpha * red + (256 - alpha) * data[data_off + 2] as u32) >> 8) as u8;
+                }
+            }
+            crate::screenshot::log_image(data, width as _, height as _);
         }
     }
 
@@ -844,18 +895,6 @@ impl Instance for Arc<XInstance> {
         Box::pin(async move {
             loop {
                 if self.cursor_grab_status() == grab {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-    }
-
-    fn cursor_position<'a>(&'a self, x: i32, y: i32) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
-        log::info!("Waiting for cursor position to become {}x{}", x, y);
-        Box::pin(async move {
-            loop {
-                if self.cursor_position_() == (x, y) {
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1105,10 +1144,21 @@ impl EventLoop for Arc<XEventLoop> {
             always_on_top: Cell::new(false),
             maximized_vert: Cell::new(false),
             maximized_horz: Cell::new(false),
+            fullscreen: Cell::new(false),
+            pre_fs_x: Cell::new(0),
+            pre_fs_y: Cell::new(0),
+            pre_fs_width: Cell::new(0),
+            pre_fs_height: Cell::new(0),
+            pre_fs_border: Cell::new(0),
             decorations: Cell::new(true),
             border: Cell::new(0),
             x: Cell::new(0),
             y: Cell::new(0),
+            x_to_be: Cell::new(0),
+            y_to_be: Cell::new(0),
+            width_to_be: Cell::new(0),
+            height_to_be: Cell::new(0),
+            border_to_be: Cell::new(0),
             width: Cell::new(0),
             height: Cell::new(0),
             min_size: Cell::new(None),
@@ -1188,10 +1238,21 @@ struct XWindow {
     always_on_top: Cell<bool>,
     maximized_vert: Cell<bool>,
     maximized_horz: Cell<bool>,
+    fullscreen: Cell<bool>,
+    pre_fs_x: Cell<i32>,
+    pre_fs_y: Cell<i32>,
+    pre_fs_width: Cell<u32>,
+    pre_fs_height: Cell<u32>,
+    pre_fs_border: Cell<u32>,
     decorations: Cell<bool>,
     border: Cell<u32>,
     x: Cell<i32>,
     y: Cell<i32>,
+    x_to_be: Cell<i32>,
+    y_to_be: Cell<i32>,
+    width_to_be: Cell<u32>,
+    height_to_be: Cell<u32>,
+    border_to_be: Cell<u32>,
     width: Cell<u32>,
     height: Cell<u32>,
     min_size: Cell<Option<(u32, u32)>>,
@@ -1570,7 +1631,7 @@ impl Seat for Arc<XSeat> {
         self.layout.set(layout);
     }
 
-    fn position_cursor(&self, x: i32, y: i32) {
+    fn set_cursor_position(&self, x: i32, y: i32) {
         log::info!("Moving cursor of seat {} to {}x{}", self.keyboard, x, y);
         let xinput = &self.instance.data.backend.xinput;
         let xcb = &self.instance.data.backend.xcb;
@@ -1591,6 +1652,28 @@ impl Seat for Arc<XSeat> {
             if let Err(e) = c.errors.check_cookie(xcb, cookie) {
                 panic!("Could not warp pointer: {}", e);
             }
+        }
+    }
+
+    fn cursor_position(&self) -> (i32, i32) {
+        unsafe {
+            let xcb = &self.instance.data.backend.xcb;
+            let xinput = &self.instance.data.backend.xinput;
+            let mut err = ptr::null_mut();
+            let reply = xinput.xcb_input_xi_query_pointer_reply(
+                self.instance.c.c,
+                xinput.xcb_input_xi_query_pointer(
+                    self.instance.c.c,
+                    self.instance.c.screen.root,
+                    self.pointer,
+                ),
+                &mut err,
+            );
+            let reply = match self.instance.c.errors.check(xcb, reply, err) {
+                Ok(r) => r,
+                Err(e) => panic!("Could not query pointer: {}", e),
+            };
+            (reply.root_x >> 16, reply.root_y >> 16)
         }
     }
 
@@ -1946,6 +2029,7 @@ struct Atoms {
     net_wm_ping: ffi::xcb_atom_t,
     utf8_string: ffi::xcb_atom_t,
     net_wm_state_above: ffi::xcb_atom_t,
+    net_wm_state_fullscreen: ffi::xcb_atom_t,
     net_frame_extents: ffi::xcb_atom_t,
     net_wm_state_maximized_horz: ffi::xcb_atom_t,
     net_wm_state_maximized_vert: ffi::xcb_atom_t,

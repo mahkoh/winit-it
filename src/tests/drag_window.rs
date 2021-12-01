@@ -17,7 +17,7 @@ async fn run(instance: &dyn Instance) {
     }));
     window.mapped(true).await;
 
-    seat.position_cursor(window.inner_offset().0 + 5, window.inner_offset().1 + 7);
+    seat.set_cursor_position(window.inner_offset().0 + 5, window.inner_offset().1 + 7);
 
     let left = mouse.press(Button::Left);
     events.window_mouse_input_event().await;

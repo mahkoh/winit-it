@@ -13,6 +13,7 @@ mod keyboard;
 mod runner;
 #[allow(dead_code)]
 mod screenshot;
+mod sleep;
 mod test;
 mod tests;
 mod tlog;

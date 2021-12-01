@@ -16,7 +16,7 @@ async fn run(instance: &dyn Instance) {
         height: 100,
     }));
     window.mapped(true).await;
-    seat.position_cursor(50, 50);
+    seat.set_cursor_position(50, 50);
 
     events.window_cursor_entered().await;
 

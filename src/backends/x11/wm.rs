@@ -133,6 +133,7 @@ pub(super) fn run(instance: Arc<XInstanceData>) -> impl Future<Output = ()> {
             window_id,
             first_randr_event,
             moving: None,
+            crtcs: vec![],
         };
 
         wm.run()
@@ -145,6 +146,14 @@ struct Wm {
     window_id: ffi::xcb_window_t,
     first_randr_event: u8,
     moving: Option<Moving>,
+    crtcs: Vec<Crtc>,
+}
+
+struct Crtc {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
 }
 
 struct Moving {
@@ -170,11 +179,51 @@ pub const TITLE_HEIGHT: u16 = 10;
 
 impl Wm {
     async fn run(mut self) {
+        self.update_crtcs();
         self.update_client_list();
         let fd = AsyncFd::with_interest(self.c.fd, Interest::READABLE).unwrap();
         loop {
             self.handle_events();
             fd.readable().await.unwrap().clear_ready();
+        }
+    }
+
+    fn update_crtcs(&mut self) {
+        unsafe {
+            let xrandr = &self.instance.backend.xrandr;
+            let xcb = &self.instance.backend.xcb;
+            let mut err = ptr::null_mut();
+            let reply = xrandr.xcb_randr_get_screen_resources_current_reply(
+                self.c.c,
+                xrandr.xcb_randr_get_screen_resources_current(self.c.c, self.c.screen.root),
+                &mut err,
+            );
+            let reply = match self.c.errors.check(xcb, reply, err) {
+                Ok(r) => r,
+                Err(e) => panic!("Can't list crtcs: {}", e),
+            };
+            let crtcs = std::slice::from_raw_parts(
+                xrandr.xcb_randr_get_screen_resources_current_crtcs(&*reply),
+                reply.num_crtcs as _,
+            );
+            self.crtcs.clear();
+            for crtc in crtcs {
+                let reply = xrandr.xcb_randr_get_crtc_info_reply(
+                    self.c.c,
+                    xrandr.xcb_randr_get_crtc_info(self.c.c, *crtc, 0),
+                    &mut err,
+                );
+                let reply = match self.c.errors.check(xcb, reply, err) {
+                    Ok(r) => r,
+                    Err(e) => panic!("Can't get crtc info: {}", e),
+                };
+                self.crtcs.push(Crtc {
+                    x: reply.x as _,
+                    y: reply.y as _,
+                    width: reply.width as _,
+                    height: reply.height as _,
+                });
+            }
         }
     }
 
@@ -225,12 +274,14 @@ impl Wm {
     }
 
     fn handle_randr_screen_change_notify(&mut self, event: &ffi::xcb_generic_event_t) {
+        self.update_crtcs();
         let event =
             unsafe { &*(event as *const _ as *const ffi::xcb_randr_screen_change_notify_event_t) };
         log::info!("{:?}", event);
     }
 
     fn handle_randr_notify(&mut self, event: &ffi::xcb_generic_event_t) {
+        self.update_crtcs();
         let event = unsafe { &*(event as *const _ as *const ffi::xcb_randr_notify_event_t) };
         match event.sub_code as u32 {
             ffi::XCB_RANDR_NOTIFY_CRTC_CHANGE => self.handle_randr_notify_crtc_change(event),
@@ -731,6 +782,8 @@ impl Wm {
             if let Err(e) = error {
                 log::warn!("Could not drag parent window: {}", e);
             }
+            win.x_to_be.set(list.x);
+            win.y_to_be.set(list.y);
         }
     }
 
@@ -809,12 +862,13 @@ impl Wm {
     fn handle_configure_request(&mut self, event: &ffi::xcb_generic_event_t) {
         let event = unsafe { &*(event as *const _ as *const ffi::xcb_configure_request_event_t) };
         log::info!(
-            "Window {} configure request: {}x{} + {}x{}",
+            "Window {} configure request: {}x{} + {}x{} ({:b})",
             event.window,
             event.x,
             event.y,
             event.width,
-            event.height
+            event.height,
+            event.value_mask,
         );
         let data = self.instance.wm_data.lock();
         let mut list = ffi::xcb_configure_window_value_list_t {
@@ -862,12 +916,28 @@ impl Wm {
             let cookie = xcb.xcb_configure_window_aux_checked(
                 self.c.c,
                 event.window,
-                (ffi::XCB_CONFIG_WINDOW_WIDTH | ffi::XCB_CONFIG_WINDOW_HEIGHT) as _,
+                event.value_mask
+                    & (ffi::XCB_CONFIG_WINDOW_WIDTH | ffi::XCB_CONFIG_WINDOW_HEIGHT) as u16,
                 &list,
             );
             let error = self.c.errors.check_cookie(xcb, cookie);
             if let Err(e) = error {
                 log::warn!("Could not configure window: {}", e);
+            }
+            if event.value_mask & ffi::XCB_CONFIG_WINDOW_X as u16 != 0 {
+                win.x_to_be.set(event.x as _);
+            }
+            if event.value_mask & ffi::XCB_CONFIG_WINDOW_Y as u16 != 0 {
+                win.y_to_be.set(event.y as _);
+            }
+            if event.value_mask & ffi::XCB_CONFIG_WINDOW_WIDTH as u16 != 0 {
+                win.width_to_be.set(event.width as _);
+            }
+            if event.value_mask & ffi::XCB_CONFIG_WINDOW_HEIGHT as u16 != 0 {
+                win.height_to_be.set(event.width as _);
+            }
+            if event.value_mask & ffi::XCB_CONFIG_WINDOW_BORDER_WIDTH as u16 != 0 {
+                win.border_to_be.set(event.border_width as _);
             }
         }
     }
@@ -1090,6 +1160,11 @@ impl Wm {
         win.border.set(event.border_width as _);
         win.width.set(event.width as _);
         win.height.set(event.height as _);
+        win.x_to_be.set(event.x as _);
+        win.y_to_be.set(event.y as _);
+        win.border_to_be.set(event.border_width as _);
+        win.width_to_be.set(event.width as _);
+        win.height_to_be.set(event.height as _);
         win.created.set(true);
         win.upgade();
         self.instance.wm_data.lock().changed();
@@ -1221,26 +1296,113 @@ impl Wm {
             _ => return,
         };
         for property in [data32[1], data32[2]] {
-            let (name, property) = if property == self.instance.atoms.net_wm_state_above {
+            let (name, cell) = if property == self.instance.atoms.net_wm_state_above {
                 ("always on top", &win.always_on_top)
             } else if property == self.instance.atoms.net_wm_state_maximized_vert {
                 ("maximized vert", &win.maximized_vert)
             } else if property == self.instance.atoms.net_wm_state_maximized_horz {
                 ("maximized horz", &win.maximized_horz)
+            } else if property == self.instance.atoms.net_wm_state_fullscreen {
+                ("fullscreen", &win.fullscreen)
+            } else if property == 0 {
+                continue;
             } else {
                 log::warn!("Unknown _NET_WM_STATE property {}", property);
                 continue;
             };
+            let old = cell.get();
             match data32[0] {
-                0 => property.set(false),
-                1 => property.set(true),
-                2 => property.set(!property.get()),
+                0 => cell.set(false),
+                1 => cell.set(true),
+                2 => cell.set(!cell.get()),
                 _ => {
                     log::warn!("Unknown _NET_WM_STATE operation {}", data32[0]);
                     continue;
                 }
             }
-            log::info!("Window {} {}: {}", name, property.get(), event.window);
+            if property == self.instance.atoms.net_wm_state_fullscreen {
+                let xcb = &self.instance.backend.xcb;
+                let (v1, v2) = if cell.get() {
+                    if !old {
+                        win.pre_fs_x.set(win.x_to_be.get());
+                        win.pre_fs_y.set(win.y_to_be.get());
+                        win.pre_fs_width.set(win.width_to_be.get());
+                        win.pre_fs_height.set(win.height_to_be.get());
+                        win.pre_fs_border.set(win.border_to_be.get());
+                    }
+                    let mut old_overlaps = false;
+                    let mut x = self.crtcs[0].x;
+                    let mut y = self.crtcs[0].y;
+                    let mut width = self.crtcs[0].width;
+                    let mut height = self.crtcs[0].height;
+                    for crtc in &self.crtcs {
+                        let overlaps = ((win.x_to_be.get() <= crtc.x
+                            && win.x_to_be.get() + win.width_to_be.get() as i32 > crtc.x)
+                            || (crtc.x <= win.x_to_be.get() && crtc.x + crtc.width > win.x_to_be.get()))
+                            && ((win.y_to_be.get() <= crtc.y
+                                && win.y_to_be.get() + win.height_to_be.get() as i32 > crtc.y)
+                                || (crtc.y <= win.y_to_be.get() && crtc.y + crtc.height > win.y_to_be.get()));
+                        if overlaps && (!old_overlaps || (crtc.x, crtc.y) < (x, y)) {
+                            x = crtc.x;
+                            y = crtc.y;
+                            width = crtc.width;
+                            height = crtc.height;
+                            old_overlaps = true;
+                        }
+                    }
+                    ([x, y, width, height, 0], [0, 0, width, height])
+                } else {
+                    (
+                        [
+                            win.pre_fs_x.get(),
+                            win.pre_fs_y.get(),
+                            win.pre_fs_width.get() as i32,
+                            (win.pre_fs_height.get() + TITLE_HEIGHT as u32) as i32,
+                            win.pre_fs_border.get() as i32,
+                        ],
+                        [
+                            0,
+                            TITLE_HEIGHT as i32,
+                            win.pre_fs_width.get() as i32,
+                            win.pre_fs_height.get() as i32,
+                        ],
+                    )
+                };
+                unsafe {
+                    log::info!("{:?}", v1);
+                    let cookie = xcb.xcb_configure_window_checked(
+                        self.c.c,
+                        win.parent_id.get(),
+                        (ffi::XCB_CONFIG_WINDOW_X
+                            | ffi::XCB_CONFIG_WINDOW_Y
+                            | ffi::XCB_CONFIG_WINDOW_WIDTH
+                            | ffi::XCB_CONFIG_WINDOW_HEIGHT
+                            | ffi::XCB_CONFIG_WINDOW_BORDER_WIDTH) as _,
+                        v1.as_ptr() as _,
+                    );
+                    if let Err(e) = self.c.errors.check_cookie(xcb, cookie) {
+                        log::warn!("Could not configure parent window: {}", e);
+                    }
+                    let cookie = xcb.xcb_configure_window_checked(
+                        self.c.c,
+                        win.id,
+                        (ffi::XCB_CONFIG_WINDOW_X
+                            | ffi::XCB_CONFIG_WINDOW_Y
+                            | ffi::XCB_CONFIG_WINDOW_WIDTH
+                            | ffi::XCB_CONFIG_WINDOW_HEIGHT) as _,
+                        v2.as_ptr() as _,
+                    );
+                    if let Err(e) = self.c.errors.check_cookie(xcb, cookie) {
+                        log::warn!("Could not configure window: {}", e);
+                    }
+                    win.x_to_be.set(v1[0] as _);
+                    win.y_to_be.set(v1[1] as _);
+                    win.width_to_be.set(v2[2] as _);
+                    win.height_to_be.set(v2[3] as _);
+                    win.border_to_be.set(v1[4] as _);
+                }
+            }
+            log::info!("Window {} {}: {}", name, cell.get(), event.window);
         }
         win.upgade();
         data.changed();

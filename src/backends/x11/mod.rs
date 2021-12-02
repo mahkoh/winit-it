@@ -56,8 +56,8 @@ mod keysyms;
 mod layout;
 mod wm;
 
-// const DEFAULT_X_PATH: &str = "/usr/lib/Xorg";
-const DEFAULT_X_PATH: &str = "/home/julian/c/xserver/install/bin/X";
+const DEFAULT_X_PATH: &str = "/usr/lib/Xorg";
+// const DEFAULT_X_PATH: &str = "/home/julian/c/xserver/install/bin/X";
 
 pub fn backend() -> Box<dyn Backend> {
     let x_path = match std::env::var("X_PATH") {

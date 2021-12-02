@@ -283,16 +283,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cpu-time"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9e393a7668fe1fad3075085b86c781883000b4ede868f43627b34a87c8b7ded"
-dependencies = [
- "libc",
- "winapi",
-]
-
-[[package]]
 name = "crossbeam"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1486,7 +1476,6 @@ dependencies = [
  "core-foundation 0.9.2",
  "core-graphics 0.22.2",
  "core-video-sys",
- "cpu-time",
  "dispatch",
  "instant",
  "lazy_static",
@@ -1552,8 +1541,9 @@ dependencies = [
 
 [[package]]
 name = "xcb-dl-util"
-version = "0.1.0"
-source = "git+https://github.com/mahkoh/xcb-dl-util?rev=d9593cc80cd9315356066b0c2cc82940d33b44a1#d9593cc80cd9315356066b0c2cc82940d33b44a1"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac09222229087f380311b876bf8651de4cfe78cf793ef8702932a81385c0f400"
 dependencies = [
  "bitflags",
  "bstr",

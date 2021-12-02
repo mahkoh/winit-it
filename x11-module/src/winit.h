@@ -19,4 +19,9 @@ void input_button_release(uint32_t mouse, uint8_t button);
 void input_mouse_move(uint32_t mouse, int32_t dx, int32_t dy);
 void input_mouse_scroll(uint32_t mouse, int32_t dx, int32_t dy);
 
+uint32_t input_new_touch();
+uint32_t input_touch_down(uint32_t touch, int32_t x, int32_t y);
+void input_touch_up(uint32_t touch, uint32_t touch_id);
+void input_touch_move(uint32_t touch, uint32_t touch_id, int32_t x, int32_t y);
+
 void input_remove_device(uint32_t id);

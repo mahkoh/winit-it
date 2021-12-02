@@ -147,6 +147,7 @@ pub trait WindowProperties {
     fn attention(&self) -> bool;
     fn supports_transparency(&self) -> bool;
     fn dragging(&self) -> bool;
+    fn fullscreen(&self) -> bool;
     fn class(&self) -> Option<String> {
         unimplemented!();
     }
@@ -539,6 +540,7 @@ impl dyn Window {
 pub trait Seat {
     fn add_keyboard(&self) -> Box<dyn Keyboard>;
     fn add_mouse(&self) -> Box<dyn Mouse>;
+    fn add_touchscreen(&self) -> Box<dyn Touchscreen>;
     fn focus(&self, window: &dyn Window);
     fn un_focus(&self);
     fn set_layout(&self, layout: Layout);
@@ -576,4 +578,12 @@ pub enum Button {
     Middle,
     Forward,
     Back,
+}
+
+pub trait Touchscreen: Device {
+    fn down(&self, x: i32, y: i32) -> Box<dyn Finger>;
+}
+
+pub trait Finger {
+    fn move_(&self, x: i32, y: i32);
 }

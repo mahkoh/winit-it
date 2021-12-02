@@ -29,12 +29,23 @@ enum MessageType {
   MT_BUTTON_RELEASE,
   MT_MOUSE_MOVE,
   MT_MOUSE_SCROLL,
+  MT_CREATE_TOUCH,
+  MT_CREATE_TOUCH_REPLY,
+  MT_TOUCH_DOWN,
+  MT_TOUCH_DOWN_REPLY,
+  MT_TOUCH_UP,
+  MT_TOUCH_MOVE,
 };
 
 typedef struct {
   uint32_t type;
   uint32_t id;
 } CreateKeyboardReply;
+
+typedef struct {
+  uint32_t type;
+  uint32_t touch_id;
+} TouchDownReply;
 
 typedef struct {
   uint32_t type;
@@ -52,6 +63,24 @@ typedef union {
     uint32_t id;
     uint32_t key;
   } key_press;
+  struct {
+    uint32_t type;
+    uint32_t id;
+    uint32_t touch_id;
+  } touch_up;
+  struct {
+    uint32_t type;
+    uint32_t id;
+    int32_t x;
+    int32_t y;
+  } touch_down;
+  struct {
+    uint32_t type;
+    uint32_t id;
+    uint32_t touch_id;
+    int32_t x;
+    int32_t y;
+  } touch_move;
   struct {
     uint32_t type;
     uint32_t id;
@@ -85,6 +114,15 @@ static void handle_message(int fd, void *closure) {
     uint32_t id = input_new_mouse();
     CreateKeyboardReply reply = {
         .type = MT_CREATE_MOUSE_REPLY,
+        .id = id,
+    };
+    assert(write(fd, &reply, sizeof(reply)) > 0);
+    break;
+  }
+  case MT_CREATE_TOUCH: {
+    uint32_t id = input_new_touch();
+    CreateKeyboardReply reply = {
+        .type = MT_CREATE_TOUCH_REPLY,
         .id = id,
     };
     assert(write(fd, &reply, sizeof(reply)) > 0);
@@ -125,6 +163,23 @@ static void handle_message(int fd, void *closure) {
     };
     video_get_info(&reply.second_crtc, &reply.first_output, &reply.second_output, &reply.small_mode_id, &reply.large_mode_id);
     assert(write(fd, &reply, sizeof(reply)) > 0);
+    break;
+  }
+  case MT_TOUCH_DOWN: {
+    uint32_t touch_id = input_touch_down(message.touch_down.id, message.touch_down.x, message.touch_down.y);
+    TouchDownReply reply = {
+        .type = MT_TOUCH_DOWN_REPLY,
+        .touch_id = touch_id,
+    };
+    assert(write(fd, &reply, sizeof(reply)) > 0);
+    break;
+  }
+  case MT_TOUCH_MOVE: {
+    input_touch_move(message.touch_move.id, message.touch_move.touch_id, message.touch_move.x, message.touch_move.y);
+    break;
+  }
+  case MT_TOUCH_UP: {
+    input_touch_up(message.touch_move.id, message.touch_move.touch_id);
     break;
   }
   default:

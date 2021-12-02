@@ -20,7 +20,12 @@ async fn run(instance: &dyn Instance) {
     window.inner_size(500, 400).await;
 
     let mon = el.primary_monitor().unwrap();
-    let other_mon = el.available_monitors().iter().find(|m| m.position() != mon.position()).unwrap().clone();
+    let other_mon = el
+        .available_monitors()
+        .iter()
+        .find(|m| m.position() != mon.position())
+        .unwrap()
+        .clone();
 
     log::info!("Testing borderless fs on primary monitor");
 
@@ -36,7 +41,9 @@ async fn run(instance: &dyn Instance) {
     el.barrier().await;
     window.winit_set_fullscreen(Some(Fullscreen::Borderless(Some(other_mon.clone()))));
     window.outer_position(0, 0).await;
-    window.inner_size(other_mon.size().width, other_mon.size().height).await;
+    window
+        .inner_size(other_mon.size().width, other_mon.size().height)
+        .await;
     events.window_scale_factor_changed().await;
 
     window.winit_set_fullscreen(None);

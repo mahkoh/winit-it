@@ -1338,10 +1338,12 @@ impl Wm {
                     for crtc in &self.crtcs {
                         let overlaps = ((win.x_to_be.get() <= crtc.x
                             && win.x_to_be.get() + win.width_to_be.get() as i32 > crtc.x)
-                            || (crtc.x <= win.x_to_be.get() && crtc.x + crtc.width > win.x_to_be.get()))
+                            || (crtc.x <= win.x_to_be.get()
+                                && crtc.x + crtc.width > win.x_to_be.get()))
                             && ((win.y_to_be.get() <= crtc.y
                                 && win.y_to_be.get() + win.height_to_be.get() as i32 > crtc.y)
-                                || (crtc.y <= win.y_to_be.get() && crtc.y + crtc.height > win.y_to_be.get()));
+                                || (crtc.y <= win.y_to_be.get()
+                                    && crtc.y + crtc.height > win.y_to_be.get()));
                         if overlaps && (!old_overlaps || (crtc.x, crtc.y) < (x, y)) {
                             x = crtc.x;
                             y = crtc.y;

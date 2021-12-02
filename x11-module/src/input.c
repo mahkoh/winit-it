@@ -12,6 +12,7 @@
 typedef enum {
   TyKeyboard = 1,
   TyMouse,
+  TyTouch,
 } Type;
 
 typedef struct Device {
@@ -27,7 +28,7 @@ static Type current_type;
 
 static void ptr_control(DeviceIntPtr dev, PtrCtrl *ctrl) { }
 
-static void init_mouse(DeviceIntPtr dev, Device *device) {
+static void init_pointer(DeviceIntPtr dev, Device *device) {
   Atom button_labels[] = {
       XIGetKnownProperty(BTN_LABEL_PROP_BTN_LEFT),
       XIGetKnownProperty(BTN_LABEL_PROP_BTN_RIGHT),
@@ -47,13 +48,25 @@ static void init_mouse(DeviceIntPtr dev, Device *device) {
   };
   uint8_t button_map[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
   assert(InitPointerDeviceStruct(&dev->public, button_map, 9, button_labels, ptr_control, GetMotionHistorySize(), 4, valuator_labels));
-  xf86InitValuatorAxisStruct(dev, 0, valuator_labels[0], -1, -1, 0, 0, 0, Relative);
-  xf86InitValuatorAxisStruct(dev, 1, valuator_labels[1], -1, -1, 0, 0, 0, Relative);
+  device->mask = valuator_mask_new(4);
+  assert(device->mask);
+}
+
+static void init_touch(DeviceIntPtr dev, Device *device) {
+  init_pointer(dev, device);
+  xf86InitValuatorAxisStruct(dev, 0, XIGetKnownProperty(AXIS_LABEL_PROP_ABS_MT_POSITION_X), 0, 1023, 0, 0, 0, Absolute);
+  xf86InitValuatorAxisStruct(dev, 1, XIGetKnownProperty(AXIS_LABEL_PROP_ABS_MT_POSITION_Y), 0, 767, 0, 0, 0, Absolute);
+  assert(InitTouchClassDeviceStruct(dev, 2, XIDirectTouch, 2));
+  assert(InitPointerAccelerationScheme(dev, PtrAccelNoOp));
+}
+
+static void init_mouse(DeviceIntPtr dev, Device *device) {
+  init_pointer(dev, device);
+  xf86InitValuatorAxisStruct(dev, 0, XIGetKnownProperty(AXIS_LABEL_PROP_REL_X), -1, -1, 0, 0, 0, Relative);
+  xf86InitValuatorAxisStruct(dev, 1, XIGetKnownProperty(AXIS_LABEL_PROP_REL_Y), -1, -1, 0, 0, 0, Relative);
   SetScrollValuator(dev, 2, SCROLL_TYPE_HORIZONTAL, 120, 0);
   SetScrollValuator(dev, 3, SCROLL_TYPE_VERTICAL, 120, 0);
   assert(InitPointerAccelerationScheme(dev, PtrAccelNoOp));
-  device->mask = valuator_mask_new(4);
-  assert(device->mask);
 }
 
 static int device_control(DeviceIntPtr dev, int what) {
@@ -68,6 +81,9 @@ static int device_control(DeviceIntPtr dev, int what) {
       break;
     case TyMouse:
       init_mouse(dev, device);
+      break;
+    case TyTouch:
+      init_touch(dev, device);
       break;
     }
   case DEVICE_ON:
@@ -90,6 +106,9 @@ static int pre_init(InputDriverPtr drv, InputInfoPtr pInfo, int flags) {
     break;
   case TyMouse:
     pInfo->type_name = XI_MOUSE;
+    break;
+  case TyTouch:
+    pInfo->type_name = XI_TOUCHSCREEN;
     break;
   default:
     assert(0 && "Invalid type");
@@ -154,6 +173,11 @@ uint32_t input_new_mouse() {
   return input_new("mouse");
 }
 
+uint32_t input_new_touch() {
+  current_type = TyTouch;
+  return input_new("touchscreen");
+}
+
 #define MIN_KEYCODE 8
 
 static Device *get_device(uint32_t id) {
@@ -177,6 +201,12 @@ static Device *get_keyboard(uint32_t keyboard) {
 static Device *get_mouse(uint32_t mouse) {
   Device *device = get_device(mouse);
   assert(device->type == TyMouse);
+  return device;
+}
+
+static Device *get_touch(uint32_t touch) {
+  Device *device = get_device(touch);
+  assert(device->type == TyTouch);
   return device;
 }
 
@@ -219,6 +249,30 @@ void input_mouse_scroll(uint32_t mouse, int32_t dx, int32_t dy) {
     valuator_mask_set(device->mask, 3, dy * 120);
   }
   xf86PostMotionEventM(device->device->dev, Relative, device->mask);
+}
+
+uint32_t input_touch_down(uint32_t touch, int32_t x, int32_t y) {
+  static uint32_t TOUCH_ID = 1;
+  Device *device = get_touch(touch);
+  valuator_mask_zero(device->mask);
+  valuator_mask_set(device->mask, 0, x);
+  valuator_mask_set(device->mask, 1, y);
+  uint32_t touch_id = TOUCH_ID++;
+  xf86PostTouchEvent(device->device->dev, touch_id, XI_TouchBegin, 0, device->mask);
+  return touch_id;
+}
+
+void input_touch_up(uint32_t touch, uint32_t touch_id) {
+  Device *device = get_touch(touch);
+  xf86PostTouchEvent(device->device->dev, touch_id, XI_TouchEnd, 0, 0);
+}
+
+void input_touch_move(uint32_t touch, uint32_t touch_id, int32_t x, int32_t y) {
+  Device *device = get_touch(touch);
+  valuator_mask_zero(device->mask);
+  valuator_mask_set(device->mask, 0, x);
+  valuator_mask_set(device->mask, 1, y);
+  xf86PostTouchEvent(device->device->dev, touch_id, XI_TouchUpdate, 0, device->mask);
 }
 
 void input_remove_device(uint32_t id) {

@@ -8,7 +8,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::RawKeyEvent;
+use winit::event::{RawKeyEvent, Touch};
 use winit::keyboard::ModifiersState;
 use winit::window::WindowId;
 
@@ -245,8 +245,19 @@ impl<'a> dyn EventStream + 'a {
         loop {
             let we = self.window_event().await;
             if let WindowEvent::Moved(pos) = &we.event {
-                log::debug!("Got window move");
+                log::debug!("Got window move: {:?}", pos);
                 return (we.clone(), pos.clone());
+            };
+        }
+    }
+
+    pub async fn window_touch_event(&mut self) -> (WindowEventExt, Touch) {
+        log::debug!("Awaiting window touch");
+        loop {
+            let we = self.window_event().await;
+            if let WindowEvent::Touch(touch) = &we.event {
+                log::debug!("Got window touch: {:?}", touch);
+                return (we.clone(), touch.clone());
             };
         }
     }

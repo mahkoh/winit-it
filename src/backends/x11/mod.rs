@@ -1,14 +1,16 @@
 use crate::backend::{
     Backend, BackendDeviceId, BackendFlags, BackendIcon, Button, Device, DndProcess, EventLoop,
-    Instance, Keyboard, Mouse, PressedButton, PressedKey, Seat, Window, WindowProperties,
+    Finger, Instance, Keyboard, Mouse, PressedButton, PressedKey, Seat, Touchscreen, Window,
+    WindowProperties,
 };
 use crate::backends::x11::dnd::DndMsg;
 use crate::backends::x11::layout::{layouts, set_names, Layouts};
 use crate::backends::x11::wm::TITLE_HEIGHT;
 use crate::backends::x11::MessageType::{
-    MT_BUTTON_PRESS, MT_BUTTON_RELEASE, MT_CREATE_MOUSE, MT_CREATE_MOUSE_REPLY,
-    MT_ENABLE_SECOND_MONITOR, MT_ENABLE_SECOND_MONITOR_REPLY, MT_GET_VIDEO_INFO,
-    MT_GET_VIDEO_INFO_REPLY, MT_MOUSE_MOVE, MT_MOUSE_SCROLL, MT_REMOVE_DEVICE,
+    MT_BUTTON_PRESS, MT_BUTTON_RELEASE, MT_CREATE_MOUSE, MT_CREATE_MOUSE_REPLY, MT_CREATE_TOUCH,
+    MT_CREATE_TOUCH_REPLY, MT_ENABLE_SECOND_MONITOR, MT_ENABLE_SECOND_MONITOR_REPLY,
+    MT_GET_VIDEO_INFO, MT_GET_VIDEO_INFO_REPLY, MT_MOUSE_MOVE, MT_MOUSE_SCROLL, MT_REMOVE_DEVICE,
+    MT_TOUCH_DOWN, MT_TOUCH_DOWN_REPLY, MT_TOUCH_MOVE, MT_TOUCH_UP,
 };
 use crate::env::set_env;
 use crate::event::{map_event, DeviceEvent, DeviceEventExt, Event, UserEvent};
@@ -430,18 +432,6 @@ unsafe impl Send for XInstance {}
 unsafe impl Sync for XInstance {}
 
 impl XInstance {
-    fn add_keyboard(&self) -> ffi::xcb_input_device_id_t {
-        let mut msg = Message {
-            ty: MT_CREATE_KEYBOARD as _,
-        };
-        uapi::write(self.data.sock.raw(), &msg).unwrap();
-        uapi::read(self.data.sock.raw(), &mut msg).unwrap();
-        unsafe {
-            assert_eq!(msg.ty, MT_CREATE_KEYBOARD_REPLY as _);
-            msg.create_keyboard_reply.id as _
-        }
-    }
-
     fn cursor_grab_status(&self) -> bool {
         let grabbed;
         unsafe {
@@ -471,16 +461,26 @@ impl XInstance {
         grabbed
     }
 
-    fn add_mouse(&self) -> ffi::xcb_input_device_id_t {
-        let mut msg = Message {
-            ty: MT_CREATE_MOUSE as _,
-        };
+    fn add_dev(&self, req: MessageType, rep: MessageType) -> ffi::xcb_input_device_id_t {
+        let mut msg = Message { ty: req as _ };
         uapi::write(self.data.sock.raw(), &msg).unwrap();
         uapi::read(self.data.sock.raw(), &mut msg).unwrap();
         unsafe {
-            assert_eq!(msg.ty, MT_CREATE_MOUSE_REPLY as _);
+            assert_eq!(msg.ty, rep as _);
             msg.create_keyboard_reply.id as _
         }
+    }
+
+    fn add_keyboard(&self) -> ffi::xcb_input_device_id_t {
+        self.add_dev(MT_CREATE_KEYBOARD, MT_CREATE_KEYBOARD_REPLY)
+    }
+
+    fn add_mouse(&self) -> ffi::xcb_input_device_id_t {
+        self.add_dev(MT_CREATE_MOUSE, MT_CREATE_MOUSE_REPLY)
+    }
+
+    fn add_touchscreen(&self) -> ffi::xcb_input_device_id_t {
+        self.add_dev(MT_CREATE_TOUCH, MT_CREATE_TOUCH_REPLY)
     }
 
     fn assign_slave(&self, slave: ffi::xcb_input_device_id_t, master: ffi::xcb_input_device_id_t) {
@@ -1542,6 +1542,10 @@ impl WindowProperties for Arc<XWindow> {
     fn icon(&self) -> Option<BackendIcon> {
         self.icon.borrow().clone()
     }
+
+    fn fullscreen(&self) -> bool {
+        self.fullscreen.get()
+    }
 }
 
 impl Drop for XWindow {
@@ -1606,6 +1610,18 @@ impl Seat for Arc<XSeat> {
         self.instance.assign_slave(id, self.pointer);
         Box::new(Arc::new(XMouse {
             pressed_buttons: Default::default(),
+            dev: XDevice {
+                seat: self.clone(),
+                id,
+            },
+        }))
+    }
+
+    fn add_touchscreen(&self) -> Box<dyn Touchscreen> {
+        let id = self.instance.add_touchscreen();
+        log::info!("Created touchscreen {} on seat {}", id, self.keyboard);
+        self.instance.assign_slave(id, self.pointer);
+        Box::new(Arc::new(XTouch {
             dev: XDevice {
                 seat: self.clone(),
                 id,
@@ -1907,6 +1923,71 @@ impl Drop for XPressedKey {
     }
 }
 
+struct XTouch {
+    dev: XDevice,
+}
+
+impl Device for Arc<XTouch> {
+    fn id(&self) -> Box<dyn BackendDeviceId> {
+        Box::new(XDeviceId { id: self.dev.id })
+    }
+}
+
+impl Touchscreen for Arc<XTouch> {
+    fn down(&self, x: i32, y: i32) -> Box<dyn Finger> {
+        let mut msg = Message {
+            touch_down: TouchDown {
+                ty: MT_TOUCH_DOWN as _,
+                id: self.dev.id as _,
+                x,
+                y,
+            },
+        };
+        uapi::write(self.dev.seat.instance.data.sock.raw(), &msg).unwrap();
+        uapi::read(self.dev.seat.instance.data.sock.raw(), &mut msg).unwrap();
+        unsafe {
+            assert_eq!(msg.ty, MT_TOUCH_DOWN_REPLY as _);
+            Box::new(XFinger {
+                touch: self.clone(),
+                touch_id: msg.touch_down_reply.touch_id,
+            })
+        }
+    }
+}
+
+struct XFinger {
+    touch: Arc<XTouch>,
+    touch_id: u32,
+}
+
+impl Finger for XFinger {
+    fn move_(&self, x: i32, y: i32) {
+        let msg = Message {
+            touch_move: TouchMove {
+                ty: MT_TOUCH_MOVE as _,
+                id: self.touch.dev.id as _,
+                touch_id: self.touch_id,
+                x,
+                y,
+            },
+        };
+        uapi::write(self.touch.dev.seat.instance.data.sock.raw(), &msg).unwrap();
+    }
+}
+
+impl Drop for XFinger {
+    fn drop(&mut self) {
+        let msg = Message {
+            touch_up: TouchUp {
+                ty: MT_TOUCH_UP as _,
+                id: self.touch.dev.id as _,
+                touch_id: self.touch_id,
+            },
+        };
+        uapi::write(self.touch.dev.seat.instance.data.sock.raw(), &msg).unwrap();
+    }
+}
+
 fn map_button(button: Button) -> u32 {
     match button {
         Button::Left => 1,
@@ -1953,6 +2034,12 @@ enum MessageType {
     MT_BUTTON_RELEASE,
     MT_MOUSE_MOVE,
     MT_MOUSE_SCROLL,
+    MT_CREATE_TOUCH,
+    MT_CREATE_TOUCH_REPLY,
+    MT_TOUCH_DOWN,
+    MT_TOUCH_DOWN_REPLY,
+    MT_TOUCH_UP,
+    MT_TOUCH_MOVE,
 }
 
 #[repr(C)]
@@ -1965,6 +2052,10 @@ union Message {
     enable_second_monitor: EnableSecondMonitor,
     get_video_info_reply: GetVideoInfoReply,
     mouse_move: MouseMove,
+    touch_move: TouchMove,
+    touch_down: TouchDown,
+    touch_down_reply: TouchDownReply,
+    touch_up: TouchUp,
 }
 
 unsafe impl Pod for Message {}
@@ -1974,6 +2065,40 @@ unsafe impl Pod for Message {}
 struct CreateKeyboardReply {
     ty: u32,
     id: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct TouchDownReply {
+    ty: u32,
+    touch_id: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct TouchUp {
+    ty: u32,
+    id: u32,
+    touch_id: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct TouchDown {
+    ty: u32,
+    id: u32,
+    x: i32,
+    y: i32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct TouchMove {
+    ty: u32,
+    id: u32,
+    touch_id: u32,
+    x: i32,
+    y: i32,
 }
 
 #[repr(C)]

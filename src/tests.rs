@@ -44,6 +44,7 @@ mod drag_window;
 mod focused;
 mod focused_multi_seat;
 mod fullscreen;
+mod fullscreen2;
 mod icon;
 mod logical_cursor_position;
 mod logical_inner_size;
@@ -61,13 +62,13 @@ mod resizable;
 mod set_position;
 mod set_size;
 mod title;
+mod touch;
 mod transparency;
 mod urgency;
 mod user_event;
 mod visible;
 mod window_keyboard;
 mod window_mouse;
-mod fullscreen2;
 
 use crate::backend::{BackendFlags, Instance};
 use std::future::Future;
@@ -129,5 +130,6 @@ pub fn tests() -> Vec<Box<dyn Test>> {
         Box::new(current_monitor::Test),
         Box::new(fullscreen::Test),
         Box::new(fullscreen2::Test),
+        Box::new(touch::Test),
     ]
 }

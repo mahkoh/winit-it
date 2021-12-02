@@ -62,6 +62,7 @@ pub trait Instance {
     fn before_poll(&self);
     fn create_dnd_path(&self, file: &str) -> PathBuf;
     fn start_dnd_process(&self, path: &Path) -> Box<dyn DndProcess>;
+    fn redraw_requested_scenarios(&self) -> usize;
     fn cursor_grabbed<'a>(&'a self, grab: bool) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
         let _ = grab;
         unimplemented!();
@@ -168,6 +169,7 @@ pub trait Window {
     fn delete(&self);
     /// left, right, top, bottom
     fn frame_extents(&self) -> (u32, u32, u32, u32);
+    fn request_redraw(&self, scenario: usize);
     fn set_outer_position(&self, x: i32, y: i32) {
         let _ = x;
         let _ = y;

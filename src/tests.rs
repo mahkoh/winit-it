@@ -57,6 +57,7 @@ mod physical_size_bounds;
 #[cfg(target_os = "linux")]
 mod ping;
 mod primary_monitor;
+mod redraw_requested;
 mod reset_dead_keys;
 mod resizable;
 mod set_position;
@@ -131,5 +132,6 @@ pub fn tests() -> Vec<Box<dyn Test>> {
         Box::new(fullscreen::Test),
         Box::new(fullscreen2::Test),
         Box::new(touch::Test),
+        Box::new(redraw_requested::Test),
     ]
 }

@@ -901,6 +901,10 @@ impl Instance for Arc<XInstance> {
             }
         })
     }
+
+    fn redraw_requested_scenarios(&self) -> usize {
+        1
+    }
 }
 
 struct XDndProcess {
@@ -1451,6 +1455,33 @@ impl Window for Arc<XWindow> {
             xcb.xcb_flush(instance.c.c);
         }
         Box::pin(Changed(&self))
+    }
+
+    fn request_redraw(&self, _scenario: usize) {
+        let msg = ffi::xcb_expose_event_t {
+            response_type: ffi::XCB_EXPOSE,
+            window: self.id,
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+            count: 0,
+            ..Default::default()
+        };
+        unsafe {
+            let xcb = &self.el.data.instance.data.backend.xcb;
+            let c = &self.el.data.instance.c;
+            let cookie = xcb.xcb_send_event_checked(
+                c.c,
+                0,
+                self.id,
+                ffi::XCB_EVENT_MASK_EXPOSURE,
+                &msg as *const _ as _,
+            );
+            if let Err(e) = c.errors.check_cookie(xcb, cookie) {
+                panic!("Could not send exposure event: {}", e);
+            }
+        }
     }
 }
 
